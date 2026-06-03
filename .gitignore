@@ -1,0 +1,41 @@
+# Dependency directories
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
+
+# Production build outputs
+build/
+dist/
+
+# SQLite databases (local development data)
+*.db
+*.db-shm
+*.db-wal
+
+# Environment files (sensitive keys/local config)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS system files
+.DS_Store
+Thumbs.db
+
+# Tooling and IDE files
+.eslintcache
+.fuse_hidden*
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Exclude copied Stockfish binaries
+public/stockfish/
