@@ -277,7 +277,7 @@ export function ChessAnalysis() {
             <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto pr-1">
               {evaluation.lines && evaluation.lines.length > 0 ? (
                 evaluation.lines.slice(0, 4).map((line, idx) => (
-                  <EngineLineRow key={idx} line={line} startFen={currentFen} onClick={() => enterVariation(line)} />
+                  <EngineLineRow key={idx} line={line} startFen={currentFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
                 ))
               ) : (
                 evaluation.pv.length > 0 && (
@@ -486,11 +486,11 @@ const SacrificeBadge = () => (
   </span>
 );
 
-const EngineLineRow = ({ line, startFen, onClick }: any) => (
+const EngineLineRow = ({ line, startFen, userColor, onClick }: any) => (
   <div onClick={onClick} className="flex items-start gap-1.5 text-xs font-mono py-1.5 border-b border-zinc-900 last:border-0 hover:bg-zinc-900/60 rounded px-1.5 cursor-pointer transition-colors">
     <span className="text-zinc-500 w-3 shrink-0">{line.multipv}.</span>
     <span className="font-bold text-zinc-200 w-11 text-right shrink-0">{formatLineScore(line)}</span>
-    {line.hasSacrifice && <SacrificeBadge />}
+    {line.hasSacrifice && startFen.split(' ')[1] === userColor && <SacrificeBadge />}
     <span className="text-zinc-400 flex-1 leading-normal break-words">{pvToSan(startFen, line.pv).join(' ')}</span>
   </div>
 );
