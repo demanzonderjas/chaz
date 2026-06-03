@@ -27,7 +27,9 @@ class StockfishScheduler {
   private listeners = new Set<(ready: boolean) => void>();
   private isSearching = false;
   private pendingStops = 0;
+  private checkingCache = false;
   private liveTask: LiveTask | null = null;
+  private lastLiveResult: EvalResult | null = null;
   private annotationQueue: AnnotationTask[] = [];
   private activeAnnotation: AnnotationTask | null = null;
   private lastAnnotationScore = 0;
@@ -76,7 +78,9 @@ class StockfishScheduler {
   private handleInfo(line: string) {
     if (!line.includes('score')) return;
     if (this.liveTask) {
-      this.liveTask.onInfo(this.parseLiveInfo(line, this.liveTask.color));
+      const res = this.parseLiveInfo(line, this.liveTask.color);
+      this.lastLiveResult = res;
+      this.liveTask.onInfo(res);
     } else if (this.activeAnnotation) {
       this.lastAnnotationScore = this.parseAnnotationScore(line, this.activeAnnotation.color);
     }
@@ -104,6 +108,7 @@ class StockfishScheduler {
   private handleBestmove(line: string) {
     if (this.pendingStops > 0) {
       this.pendingStops--;
+      this.lastLiveResult = null;
       return this.runNext();
     }
     this.isSearching = false;
@@ -113,12 +118,35 @@ class StockfishScheduler {
 
   private completeCurrentTask(mv: string) {
     if (this.liveTask) {
-      this.liveTask.onInfo({ depth: 0, score: null, mate: null, bestMove: mv, pv: [] });
-      this.liveTask = null;
+      this.completeLiveTask();
     } else if (this.activeAnnotation) {
-      this.activeAnnotation.onScore(this.lastAnnotationScore);
-      this.activeAnnotation = null;
+      this.completeAnnotationTask(mv);
     }
+  }
+
+  private completeLiveTask() {
+    const task = this.liveTask;
+    this.liveTask = null;
+    if (task && this.lastLiveResult && this.lastLiveResult.depth >= task.depth) {
+      this.saveCache(task.fen, task.depth, task.color, this.lastLiveResult);
+    }
+    this.lastLiveResult = null;
+  }
+
+  private completeAnnotationTask(mv: string) {
+    const task = this.activeAnnotation;
+    this.activeAnnotation = null;
+    if (!task) return;
+    this.saveAnnotationResult(task, mv);
+  }
+
+  private saveAnnotationResult(task: AnnotationTask, mv: string) {
+    const s = this.lastAnnotationScore;
+    this.saveCache(task.fen, task.depth, task.color, {
+      depth: task.depth, score: s, bestMove: mv, pv: [],
+      mate: Math.abs(s) >= 30000 ? (s > 0 ? 30000 : -30000) : null,
+    });
+    task.onScore(s);
   }
 
   public startLiveEval(task: LiveTask) {
@@ -128,12 +156,13 @@ class StockfishScheduler {
   }
 
   private stopCurrentSearch() {
+    this.liveTask = null;
+    this.lastLiveResult = null;
+    this.restoreActiveAnnotation();
     if (!this.isSearching) return;
     this.pendingStops++;
     this.worker?.postMessage('stop');
     this.isSearching = false;
-    this.liveTask = null;
-    this.restoreActiveAnnotation();
   }
 
   private restoreActiveAnnotation() {
@@ -149,22 +178,58 @@ class StockfishScheduler {
     this.isSearching = true;
   }
 
-  private runNext() {
-    if (this.isSearching || this.pendingStops > 0) return;
+  private async runNext() {
+    if (this.isSearching || this.pendingStops > 0 || this.checkingCache) return;
     if (this.liveTask) {
-      this.sendSearch(this.liveTask.fen, this.liveTask.depth);
+      await this.runLiveTask(this.liveTask);
       return;
     }
-    this.runNextAnnotation();
+    await this.runNextAnnotation();
   }
 
-  private runNextAnnotation() {
+  private async runLiveTask(task: LiveTask) {
+    this.checkingCache = true;
+    const cached = await this.checkCache(task.fen, task.depth, task.color);
+    this.checkingCache = false;
+    this.handleLiveCacheResult(task, cached);
+  }
+
+  private handleLiveCacheResult(task: LiveTask, cached: EvalResult | null) {
+    if (this.liveTask !== task) {
+      this.runNext();
+      return;
+    }
+    if (!cached) return this.sendSearch(task.fen, task.depth);
+    task.onInfo(cached);
+    this.liveTask = null;
+    this.runNext();
+  }
+
+  private async runNextAnnotation() {
     const next = this.annotationQueue.shift();
     if (!next) return this.onFinishedCallback?.();
     this.activeAnnotation = next;
     this.lastAnnotationScore = 0;
-    this.sendSearch(next.fen, next.depth);
     this.notifyProgress();
+    await this.processAnnotation(next);
+  }
+
+  private async processAnnotation(next: AnnotationTask) {
+    this.checkingCache = true;
+    const cached = await this.checkCache(next.fen, next.depth, next.color);
+    this.checkingCache = false;
+    this.handleAnnotationCacheResult(next, cached);
+  }
+
+  private handleAnnotationCacheResult(next: AnnotationTask, cached: EvalResult | null) {
+    if (this.activeAnnotation !== next) {
+      this.runNext();
+      return;
+    }
+    if (!cached) return this.sendSearch(next.fen, next.depth);
+    this.activeAnnotation = null;
+    next.onScore(cached.score ?? 0);
+    this.runNext();
   }
 
   private notifyProgress() {
@@ -200,6 +265,46 @@ class StockfishScheduler {
     this.worker?.terminate();
     this.worker = null;
     this.ready = false;
+  }
+
+  private async checkCache(fen: string, depth: number, color: 'w' | 'b'): Promise<EvalResult | null> {
+    try {
+      const res = await fetch(`/api/analysis?fen=${encodeURIComponent(fen)}&depth=${depth}`);
+      const data = res.ok ? await res.json() : null;
+      return data?.cached ? this.mapCachedResult(data.result, color) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private mapCachedResult(r: any, color: 'w' | 'b'): EvalResult {
+    const sign = color === 'w' ? 1 : -1;
+    return {
+      depth: r.depth,
+      score: r.cp !== undefined ? r.cp * sign : null,
+      mate: r.mate !== undefined ? r.mate * sign : null,
+      bestMove: r.bestMove || null,
+      pv: r.pv || []
+    };
+  }
+
+  private async saveCache(fen: string, depth: number, color: 'w' | 'b', result: EvalResult) {
+    try {
+      const body = JSON.stringify(this.buildSaveBody(fen, depth, color, result));
+      await fetch('/api/analysis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    } catch (e) {
+      console.error('Failed to save to cache', e);
+    }
+  }
+
+  private buildSaveBody(fen: string, depth: number, color: 'w' | 'b', res: EvalResult) {
+    const sign = color === 'w' ? 1 : -1;
+    const cp = res.score !== null ? res.score * sign : undefined;
+    const mate = res.mate !== null ? res.mate * sign : undefined;
+    return {
+      fen, depth,
+      result: { bestMove: res.bestMove, pv: res.pv, depth: res.depth, cp, mate }
+    };
   }
 }
 

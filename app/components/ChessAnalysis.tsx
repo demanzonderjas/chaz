@@ -115,6 +115,14 @@ export function ChessAnalysis() {
 
   // Arrows
   const arrowMap = new Map<string, Arrow>();
+  if (evaluation.bestMove && evaluation.bestMove.length >= 4) {
+    const key = `${evaluation.bestMove.slice(0, 2)}-${evaluation.bestMove.slice(2, 4)}`;
+    arrowMap.set(key, {
+      startSquare: evaluation.bestMove.slice(0, 2),
+      endSquare: evaluation.bestMove.slice(2, 4),
+      color: 'rgba(0,200,100,0.8)',
+    });
+  }
   for (const bm of bookMoves) {
     if (bm.uci.length >= 4) {
       const key = `${bm.uci.slice(0, 2)}-${bm.uci.slice(2, 4)}`;
@@ -125,14 +133,6 @@ export function ChessAnalysis() {
         color: isHovered ? 'rgba(96,165,250,0.95)' : bm.isMainline ? 'rgba(96,165,250,0.55)' : 'rgba(96,165,250,0.25)',
       });
     }
-  }
-  if (evaluation.bestMove && evaluation.bestMove.length >= 4) {
-    const key = `${evaluation.bestMove.slice(0, 2)}-${evaluation.bestMove.slice(2, 4)}`;
-    arrowMap.set(key, {
-      startSquare: evaluation.bestMove.slice(0, 2),
-      endSquare: evaluation.bestMove.slice(2, 4),
-      color: 'rgba(0,200,100,0.8)',
-    });
   }
   const arrows: Arrow[] = Array.from(arrowMap.values());
 
@@ -261,12 +261,12 @@ export function ChessAnalysis() {
 
         {/* Board */}
         <div className="flex flex-col items-center justify-center flex-1 p-2 gap-4">
-          <div style={{ width: 'min(calc(100vh - 280px), calc(100vw - 380px))', aspectRatio: '1' }}>
+          <div style={{ width: 'min(calc(100vh - 280px), calc(100vw - 380px))', aspectRatio: '1', position: 'relative' }}>
             <ChessboardProvider
               options={{
                 position: currentFen,
                 boardOrientation: orientation,
-                arrows,
+                arrows: [],
                 allowDrawingArrows: true,
                 animationDurationInMs: 150,
                 darkSquareStyle: { backgroundColor: '#4a7c59' },
@@ -277,6 +277,7 @@ export function ChessAnalysis() {
             >
               <Chessboard />
             </ChessboardProvider>
+            <CustomBoardArrows arrows={arrows} orientation={orientation} />
           </div>
           <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 380px))' }}>
             <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => setCursor(i)} />
@@ -358,5 +359,75 @@ export function ChessAnalysis() {
         </div>
       </div>
     </div>
+  );
+}
+
+function getSquareCoords(square: string, orientation: 'white' | 'black') {
+  const colIndex = square.charCodeAt(0) - 97;
+  const rowIndex = parseInt(square[1]) - 1;
+  const x = orientation === 'white' ? (colIndex + 0.5) * 12.5 : (7 - colIndex + 0.5) * 12.5;
+  const y = orientation === 'white' ? (7 - rowIndex + 0.5) * 12.5 : (rowIndex + 0.5) * 12.5;
+  return { x, y };
+}
+
+function getArrowheadPoints(bx: number, by: number, tx: number, ty: number, theta: number) {
+  const width = 5.0;
+  const lx = bx + (width / 2) * Math.cos(theta + Math.PI / 2);
+  const ly = by + (width / 2) * Math.sin(theta + Math.PI / 2);
+  const rx = bx + (width / 2) * Math.cos(theta - Math.PI / 2);
+  const ry = by + (width / 2) * Math.sin(theta - Math.PI / 2);
+  return `${tx},${ty} ${lx},${ly} ${rx},${ry}`;
+}
+
+function parseColorOpacity(color: string) {
+  const match = color.match(/rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)/);
+  if (match) {
+    return {
+      solidColor: `rgb(${match[1]}, ${match[2]}, ${match[3]})`,
+      opacity: parseFloat(match[4]),
+    };
+  }
+  return { solidColor: color, opacity: 1 };
+}
+
+function getKnightArrow(from: { x: number; y: number }, to: { x: number; y: number }, dx: number, dy: number) {
+  const corner = Math.abs(dx) < Math.abs(dy) ? { x: from.x, y: to.y } : { x: to.x, y: from.y };
+  const theta = Math.atan2(to.y - corner.y, to.x - corner.x);
+  const bx = to.x - 5.0 * Math.cos(theta), by = to.y - 5.0 * Math.sin(theta);
+  return { pathD: `M ${from.x} ${from.y} L ${corner.x} ${corner.y} L ${bx} ${by}`, theta, bx, by, tx: to.x, ty: to.y };
+}
+
+function getStraightArrow(from: { x: number; y: number }, to: { x: number; y: number }, dx: number, dy: number) {
+  const theta = Math.atan2(dy, dx);
+  const bx = to.x - 5.0 * Math.cos(theta), by = to.y - 5.0 * Math.sin(theta);
+  return { pathD: `M ${from.x} ${from.y} L ${bx} ${by}`, theta, bx, by, tx: to.x, ty: to.y };
+}
+
+function getArrowData(arrow: Arrow, orientation: 'white' | 'black') {
+  const from = getSquareCoords(arrow.startSquare, orientation);
+  const to = getSquareCoords(arrow.endSquare, orientation);
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const isKnight = Math.abs(Math.round(dx / 12.5) * Math.round(dy / 12.5)) === 2;
+  return isKnight ? getKnightArrow(from, to, dx, dy) : getStraightArrow(from, to, dx, dy);
+}
+
+const ArrowGroup = ({ arrow, orientation }: { arrow: Arrow; orientation: 'white' | 'black' }) => {
+  const d = getArrowData(arrow, orientation);
+  const p = getArrowheadPoints(d.bx, d.by, d.tx, d.ty, d.theta);
+  const { solidColor, opacity } = parseColorOpacity(arrow.color);
+  return (
+    <g style={{ opacity }}>
+      <path d={d.pathD} fill="none" stroke={solidColor} strokeWidth="2.5" strokeLinecap="round" />
+      <polygon points={p} fill={solidColor} />
+    </g>
+  );
+};
+
+function CustomBoardArrows({ arrows, orientation }: { arrows: Arrow[]; orientation: 'white' | 'black' }) {
+  const style = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none', zIndex: 20 } as const;
+  return (
+    <svg viewBox="0 0 100 100" style={style}>
+      {arrows.map((a, i) => <ArrowGroup key={i} arrow={a} orientation={orientation} />)}
+    </svg>
   );
 }

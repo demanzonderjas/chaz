@@ -4,7 +4,6 @@ const nextConfig: NextConfig = {
   experimental: {
     largePageDataBytes: 512 * 1000,
   },
-  serverExternalPackages: ['better-sqlite3'],
   async headers() {
     return [
       {
