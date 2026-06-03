@@ -9,6 +9,7 @@ import { useGameAnalysis, HistoryEntry, STARTING_FEN } from '../hooks/useGameAna
 import { EvalBar } from './EvalBar';
 import { MoveList } from './MoveList';
 import { GameGraph } from './GameGraph';
+import { DbExplorer } from './DbExplorer';
 
 type Arrow = { startSquare: string; endSquare: string; color: string };
 
@@ -82,6 +83,15 @@ export function ChessAnalysis() {
     },
     [currentFen, cursor, analyzeLastMove]
   );
+
+  const playUciMove = useCallback((uci: string) => {
+    const chess = new Chess(currentFen), m = tryMakeMove(chess, uci);
+    if (!m) return;
+    const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
+    setHistory(next);
+    setCursor(next.length - 1);
+    setTimeout(() => analyzeLastMove(next), 0);
+  }, [currentFen, cursor, history, analyzeLastMove]);
 
   // PGN load
   const loadPgn = useCallback(() => {
@@ -332,6 +342,9 @@ export function ChessAnalysis() {
             </div>
           )}
 
+          {/* Db Explorer */}
+          <DbExplorer fen={currentFen} onSelectMove={playUciMove} />
+
           {/* Move list */}
           <div className="flex-1 overflow-hidden">
             <MoveList
@@ -430,4 +443,12 @@ function CustomBoardArrows({ arrows, orientation }: { arrows: Arrow[]; orientati
       {arrows.map((a, i) => <ArrowGroup key={i} arrow={a} orientation={orientation} />)}
     </svg>
   );
+}
+
+function tryMakeMove(chess: Chess, uci: string) {
+  try {
+    return chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+  } catch {
+    return null;
+  }
 }
