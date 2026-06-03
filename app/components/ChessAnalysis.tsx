@@ -10,6 +10,7 @@ import { EvalBar } from './EvalBar';
 import { MoveList } from './MoveList';
 import { GameGraph } from './GameGraph';
 import { DbExplorer } from './DbExplorer';
+import { GameLibrary } from './GameLibrary';
 
 type Arrow = { startSquare: string; endSquare: string; color: string };
 
@@ -27,6 +28,8 @@ export function ChessAnalysis() {
   const [pgnInput, setPgnInput] = useState('');
   const [pgnError, setPgnError] = useState('');
   const [showPgnPanel, setShowPgnPanel] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [baseState, setBaseState] = useState<{ history: HistoryEntry[]; cursor: number } | null>(null);
   const [hoveredBook, setHoveredBook] = useState<string | null>(null);
 
   const { ready, evaluation, analyse } = useStockfish();
@@ -36,10 +39,9 @@ export function ChessAnalysis() {
   const currentFen = cursor < 0 ? STARTING_FEN : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
 
-  // Real-time engine analysis of current position
   useEffect(() => {
     if (!ready) return;
-    analyse(currentFen, currentColor, 22);
+    analyse(currentFen, currentColor, 16);
   }, [ready, currentFen, currentColor, analyse]);
 
   // Keyboard navigation
@@ -57,29 +59,13 @@ export function ChessAnalysis() {
 
   // Interactive piece drop
   const onPieceDrop = useCallback(
-    ({ sourceSquare, targetSquare, piece }: { sourceSquare: string; targetSquare: string | null; piece: { pieceType: string } }) => {
+    ({ sourceSquare, targetSquare, piece }: any) => {
       if (!targetSquare) return false;
-      const chess = new Chess(currentFen);
-      const promo =
-        piece.pieceType.toLowerCase().endsWith('p') &&
-        ((piece.pieceType[0] === 'P' && targetSquare[1] === '8') ||
-          (piece.pieceType[0] === 'p' && targetSquare[1] === '1'))
-          ? 'q' : undefined;
-      try {
-        const move = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
-        if (!move) return false;
-        const newEntry: HistoryEntry = { fen: chess.fen(), san: move.san, to: move.to };
-        setHistory((prev) => {
-          const next = [...prev.slice(0, cursor + 1), newEntry];
-          // Analyze the new move after state updates
-          setTimeout(() => analyzeLastMove(next), 0);
-          return next;
-        });
-        setCursor((c) => c + 1);
-        return true;
-      } catch {
-        return false;
-      }
+      const promo = getPromotionPiece(piece.pieceType, targetSquare);
+      const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
+      if (!entry) return false;
+      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove);
+      return true;
     },
     [currentFen, cursor, analyzeLastMove]
   );
@@ -93,35 +79,40 @@ export function ChessAnalysis() {
     setTimeout(() => analyzeLastMove(next), 0);
   }, [currentFen, cursor, history, analyzeLastMove]);
 
+  const loadRawPgn = useCallback((pgn: string) => {
+    const entries = parsePgnMoves(pgn);
+    setOrientation(getPlayerOrientation(pgn));
+    setHistory(entries);
+    setCursor(-1);
+    resetAnalysis();
+    analyzeGame(entries);
+    fetch('/api/games', { method: 'POST', body: JSON.stringify({ pgn }) }).catch(console.error);
+  }, [analyzeGame, resetAnalysis]);
+
   // PGN load
   const loadPgn = useCallback(() => {
     try {
-      const chess = new Chess();
-      chess.loadPgn(pgnInput.trim());
-      const headers = chess.header();
-      const moves = chess.history({ verbose: true });
-      const entries: HistoryEntry[] = [];
-      const replay = new Chess();
-      for (const m of moves) {
-        replay.move(m.san);
-        entries.push({ fen: replay.fen(), san: m.san, to: m.to });
-      }
-      const username = 'demanzonderjas';
-      const whitePlayer = (headers['White'] ?? '').toLowerCase();
-      const blackPlayer = (headers['Black'] ?? '').toLowerCase();
-      if (blackPlayer.includes(username)) setOrientation('black');
-      else if (whitePlayer.includes(username)) setOrientation('white');
-      setHistory(entries);
-      setCursor(entries.length - 1);
+      loadRawPgn(pgnInput);
       setPgnError('');
       setShowPgnPanel(false);
       setPgnInput('');
-      resetAnalysis();
-      analyzeGame(entries);
-    } catch {
-      setPgnError('Invalid PGN — check the format and try again.');
-    }
-  }, [pgnInput, analyzeGame, resetAnalysis]);
+    } catch { setPgnError('Invalid PGN — check the format and try again.'); }
+  }, [pgnInput, loadRawPgn]);
+
+  const enterVariation = useCallback((line: any) => {
+    if (baseState) return;
+    setBaseState({ history, cursor });
+    const newEntries = buildVariationEntries(currentFen, line.pv);
+    setHistory([...history.slice(0, cursor + 1), ...newEntries]);
+    setCursor(cursor + 1);
+  }, [baseState, history, cursor, currentFen]);
+
+  const exitVariation = useCallback(() => {
+    if (!baseState) return;
+    setHistory(baseState.history);
+    setCursor(baseState.cursor);
+    setBaseState(null);
+  }, [baseState]);
 
   // Arrows
   const arrowMap = new Map<string, Arrow>();
@@ -151,45 +142,12 @@ export function ChessAnalysis() {
   const currentAnnotation = cursor >= 0 ? annotations[cursor] : null;
 
   const squareRenderer = useCallback(
-    ({ square, children }: { piece: { pieceType: string } | null; square: string; children?: React.ReactNode }) => {
-      const icons = square === annotationSquare && currentAnnotation?.types.length
-        ? currentAnnotation.types
-        : [];
+    ({ square, children }: any) => {
+      const show = square === annotationSquare && currentAnnotation?.types.length;
       return (
-        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <div className="relative w-full h-full">
           {children}
-          {icons.length > 0 && (
-            <div style={{
-              position: 'absolute', top: 3, right: 3, zIndex: 20,
-              display: 'flex', gap: 3, pointerEvents: 'none',
-            }}>
-              {icons.map((t) => {
-                const icon = ANNOTATION_ICONS[t];
-                return icon ? (
-                  <span
-                    key={t}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: t === 'book' ? '56px' : '48px',
-                      height: t === 'book' ? '56px' : '48px',
-                      borderRadius: '50%',
-                      backgroundColor: icon.bg,
-                      color: icon.text,
-                      fontSize: t === 'book' ? '32px' : '24px',
-                      fontWeight: 'bold',
-                      border: '3px solid #ffffff',
-                      boxShadow: '0 4px 8px rgba(0,0,0,0.5)',
-                      lineHeight: 1,
-                    }}
-                  >
-                    {icon.symbol}
-                  </span>
-                ) : null;
-              })}
-            </div>
-          )}
+          {show && <SquareAnnotations types={currentAnnotation.types} />}
         </div>
       );
     },
@@ -233,6 +191,10 @@ export function ChessAnalysis() {
               </button>
             ) : null
           )}
+          <button onClick={() => setShowLibrary(true)}
+            className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
+            📚 Library
+          </button>
           <button onClick={() => setShowPgnPanel((v) => !v)}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             {showPgnPanel ? 'Close PGN' : 'Import PGN'}
@@ -271,7 +233,7 @@ export function ChessAnalysis() {
 
         {/* Board */}
         <div className="flex flex-col items-center justify-center flex-1 p-2 gap-4">
-          <div style={{ width: 'min(calc(100vh - 280px), calc(100vw - 380px))', aspectRatio: '1', position: 'relative' }}>
+          <div className="relative aspect-square" style={{ width: 'min(calc(100vh - 280px), calc(100vw - 560px))' }}>
             <ChessboardProvider
               options={{
                 position: currentFen,
@@ -289,24 +251,42 @@ export function ChessAnalysis() {
             </ChessboardProvider>
             <CustomBoardArrows arrows={arrows} orientation={orientation} />
           </div>
-          <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 380px))' }}>
+          <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 560px))' }}>
             <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => setCursor(i)} />
           </div>
         </div>
 
         {/* Right panel */}
-        <div className="w-80 flex flex-col border-l border-zinc-800 shrink-0">
+        <div className="w-[500px] flex flex-col border-l border-zinc-800 shrink-0">
+          {baseState && (
+            <div className="bg-blue-950/40 border-b border-blue-900/60 p-2.5 text-center flex flex-col gap-1.5 shrink-0 select-none">
+              <span className="text-xs text-blue-300 font-semibold flex items-center justify-center gap-1">🔍 Viewing Variation Line</span>
+              <button onClick={exitVariation}
+                className="text-xs py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full">
+                Back to Game
+              </button>
+            </div>
+          )}
+
           {/* Eval summary */}
           <div className="px-3 py-2 border-b border-zinc-800 shrink-0">
-            <div className="flex items-baseline gap-2">
+            <div className="flex items-baseline justify-between">
               <span className="text-2xl font-bold tabular-nums">{evalLabel()}</span>
               <span className="text-xs text-zinc-500">depth {evaluation.depth}</span>
             </div>
-            {evaluation.pv.length > 0 && (
-              <p className="text-xs text-zinc-400 mt-1 truncate font-mono">
-                {evaluation.pv.slice(0, 5).join(' ')}
-              </p>
-            )}
+            <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto pr-1">
+              {evaluation.lines && evaluation.lines.length > 0 ? (
+                evaluation.lines.slice(0, 4).map((line, idx) => (
+                  <EngineLineRow key={idx} line={line} startFen={currentFen} onClick={() => enterVariation(line)} />
+                ))
+              ) : (
+                evaluation.pv.length > 0 && (
+                  <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
+                    {pvToSan(currentFen, evaluation.pv).join(' ')}
+                  </p>
+                )
+              )}
+            </div>
           </div>
 
           {/* Book moves */}
@@ -352,6 +332,7 @@ export function ChessAnalysis() {
               currentIndex={cursor}
               annotations={annotations}
               onSelect={(i) => setCursor(i)}
+              variationStart={baseState ? baseState.cursor : -1}
             />
           </div>
 
@@ -371,6 +352,7 @@ export function ChessAnalysis() {
           </div>
         </div>
       </div>
+      <GameLibrary isOpen={showLibrary} onClose={() => setShowLibrary(false)} onSelectGame={loadRawPgn} />
     </div>
   );
 }
@@ -437,9 +419,8 @@ const ArrowGroup = ({ arrow, orientation }: { arrow: Arrow; orientation: 'white'
 };
 
 function CustomBoardArrows({ arrows, orientation }: { arrows: Arrow[]; orientation: 'white' | 'black' }) {
-  const style = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none', zIndex: 20 } as const;
   return (
-    <svg viewBox="0 0 100 100" style={style}>
+    <svg viewBox="0 0 100 100" className="absolute inset-0 pointer-events-none z-20">
       {arrows.map((a, i) => <ArrowGroup key={i} arrow={a} orientation={orientation} />)}
     </svg>
   );
@@ -452,3 +433,104 @@ function tryMakeMove(chess: Chess, uci: string) {
     return null;
   }
 }
+
+function parsePgnMoves(pgn: string): HistoryEntry[] {
+  const chess = new Chess();
+  chess.loadPgn(pgn.trim());
+  const replay = new Chess();
+  return chess.history({ verbose: true }).map((m) => {
+    replay.move(m.san);
+    return { fen: replay.fen(), san: m.san, to: m.to };
+  });
+}
+
+function getPlayerOrientation(pgn: string): 'white' | 'black' {
+  const chess = new Chess();
+  chess.loadPgn(pgn.trim());
+  const headers = chess.header();
+  const white = (headers['White'] ?? '').toLowerCase();
+  const black = (headers['Black'] ?? '').toLowerCase();
+  return black.includes('demanzonderjas') ? 'black' : 'white';
+}
+
+function buildVariationEntries(startFen: string, pv: string[]): HistoryEntry[] {
+  const chess = new Chess(startFen);
+  const entries: HistoryEntry[] = [];
+  for (const m of pv) {
+    const move = tryMakeMove(chess, m);
+    if (!move) break;
+    entries.push({ fen: chess.fen(), san: move.san, to: move.to });
+  }
+  return entries;
+}
+
+function pvToSan(startFen: string, pv: string[]): string[] {
+  try {
+    const chess = new Chess(startFen);
+    return pv.slice(0, 16).map((m) => chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] })?.san || m);
+  } catch {
+    return pv.slice(0, 16);
+  }
+}
+
+function formatLineScore(line: any): string {
+  if (line.mate !== null) return `M${Math.abs(line.mate)}`;
+  if (line.score === null) return '0.00';
+  const cp = line.score / 100;
+  return (cp >= 0 ? '+' : '') + cp.toFixed(2);
+}
+
+const SacrificeBadge = () => (
+  <span className="px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/35 text-[9px] font-bold select-none leading-none shrink-0" title="Material Sacrifice">
+    🔥 SAC
+  </span>
+);
+
+const EngineLineRow = ({ line, startFen, onClick }: any) => (
+  <div onClick={onClick} className="flex items-start gap-1.5 text-xs font-mono py-1.5 border-b border-zinc-900 last:border-0 hover:bg-zinc-900/60 rounded px-1.5 cursor-pointer transition-colors">
+    <span className="text-zinc-500 w-3 shrink-0">{line.multipv}.</span>
+    <span className="font-bold text-zinc-200 w-11 text-right shrink-0">{formatLineScore(line)}</span>
+    {line.hasSacrifice && <SacrificeBadge />}
+    <span className="text-zinc-400 flex-1 leading-normal break-words">{pvToSan(startFen, line.pv).join(' ')}</span>
+  </div>
+);
+
+function getPromotionPiece(pieceType: string, targetSquare: string): string | undefined {
+  const isPawn = pieceType.toLowerCase().endsWith('p');
+  const isPromoRank = targetSquare[1] === '8' || targetSquare[1] === '1';
+  return isPawn && isPromoRank ? 'q' : undefined;
+}
+
+function executeMove(fen: string, from: string, to: string, promo?: string) {
+  try {
+    const chess = new Chess(fen);
+    const m = chess.move({ from, to, promotion: promo });
+    return m ? { fen: chess.fen(), san: m.san, to: m.to } : null;
+  } catch {
+    return null;
+  }
+}
+
+function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any) {
+  setHistory((prev: HistoryEntry[]) => {
+    const next = [...prev.slice(0, cursor + 1), entry];
+    setTimeout(() => analyzeLastMove(next), 0);
+    return next;
+  });
+  setCursor((c: number) => c + 1);
+}
+
+const AnnotationBadge = ({ type }: { type: string }) => {
+  const icon = ANNOTATION_ICONS[type];
+  if (!icon) return null;
+  const size = type === 'book' ? 'w-14 h-14 text-3xl' : 'w-12 h-12 text-2xl';
+  return (
+    <span className={`flex items-center justify-center rounded-full border-[3px] border-white shadow-[0_4px_8px_rgba(0,0,0,0.5)] font-bold leading-none ${size}`} style={{ backgroundColor: icon.bg, color: icon.text }}>{icon.symbol}</span>
+  );
+};
+
+const SquareAnnotations = ({ types }: { types: string[] }) => (
+  <div className="absolute top-[3px] right-[3px] z-20 flex gap-[3px] pointer-events-none">
+    {types.map((t) => <AnnotationBadge key={t} type={t} />)}
+  </div>
+);

@@ -1,0 +1,108 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+
+interface Props {
+  isOpen: boolean;
+  onClose: () => void;
+  onSelectGame: (pgn: string) => void;
+}
+
+async function handleGameClick(id: number, onSelect: (pgn: string) => void, onClose: () => void) {
+  const res = await fetch(`/api/games?id=${id}`);
+  if (res.ok) {
+    const data = await res.json();
+    onSelect(data.pgn);
+    onClose();
+  }
+}
+
+async function fetchGames(setGames: any, setLoading: any) {
+  const r = await fetch('/api/games');
+  const d = await r.json();
+  setGames(d.games || []);
+  setLoading(false);
+}
+
+function useGamesList(isOpen: boolean) {
+  const [games, setGames] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (isOpen) fetchGames(setGames, setLoading);
+  }, [isOpen]);
+  return { games, loading };
+}
+
+function getOutcome(res: string, color: string) {
+  if (res === '1/2-1/2') return 'draw';
+  if ((res === '1-0' && color === 'w') || (res === '0-1' && color === 'b')) return 'win';
+  return 'loss';
+}
+
+function getOutcomeStyles(outcome: string) {
+  if (outcome === 'win') return 'bg-emerald-950/60 text-emerald-400 border border-emerald-800';
+  if (outcome === 'loss') return 'bg-rose-950/60 text-rose-400 border border-rose-800';
+  return 'bg-zinc-800 text-zinc-400 border border-zinc-700';
+}
+
+const GameHeader = ({ date, moves }: any) => (
+  <div className="flex justify-between text-xs text-zinc-500 mb-1">
+    <span>{date}</span>
+    <span className="font-semibold">{moves} moves</span>
+  </div>
+);
+
+const GameTags = ({ outcome, result, outcomeStyles, color }: any) => (
+  <div className="flex gap-2 mt-2">
+    <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-bold ${outcomeStyles}`}>
+      {outcome} ({result})
+    </span>
+    <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 font-medium">
+      As {color === 'w' ? 'White' : 'Black'}
+    </span>
+  </div>
+);
+
+const GameCard = ({ game, onClick }: any) => {
+  const outcome = getOutcome(game.result, game.user_color);
+  return (
+    <div onClick={onClick} className="p-3 mb-2 rounded bg-zinc-900 border border-zinc-800 hover:border-zinc-750 hover:bg-zinc-900/80 cursor-pointer transition-all">
+      <GameHeader date={game.played_date} moves={game.move_count} />
+      <div className="text-sm font-semibold text-zinc-200 truncate">{game.white_name} vs {game.black_name}</div>
+      <GameTags outcome={outcome} result={game.result} outcomeStyles={getOutcomeStyles(outcome)} color={game.user_color} />
+    </div>
+  );
+};
+
+const DrawerHeader = ({ onClose }: any) => (
+  <div className="p-4 border-b border-zinc-800 flex justify-between items-center">
+    <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">📚 Game Library</h2>
+    <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300 cursor-pointer text-2xl font-light select-none">×</button>
+  </div>
+);
+
+const DrawerBody = ({ loading, games, onSelectGame, onClose }: any) => (
+  <div className="flex-1 overflow-y-auto p-4">
+    {loading ? <div className="text-center text-xs text-zinc-500 py-8">Loading games...</div> :
+      games.map((g: any) => <GameCard key={g.id} game={g} onClick={() => handleGameClick(g.id, onSelectGame, onClose)} />)}
+  </div>
+);
+
+const DrawerPanel = ({ isOpen, onClose, children }: any) => (
+  <div className={`fixed inset-0 z-40 ${isOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+    <div onClick={onClose} className={`absolute inset-0 bg-black/60 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'}`} />
+    <div className={`absolute top-0 left-0 bottom-0 w-80 bg-zinc-950 border-r border-zinc-800 z-50 transform transition-transform duration-300 flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <DrawerHeader onClose={onClose} />
+      {children}
+    </div>
+  </div>
+);
+
+export function GameLibrary({ isOpen, onClose, onSelectGame }: Props) {
+  const { games, loading } = useGamesList(isOpen);
+  return (
+    <DrawerPanel isOpen={isOpen} onClose={onClose}>
+      <DrawerBody loading={loading} games={games} onSelectGame={onSelectGame} onClose={onClose} />
+    </DrawerPanel>
+  );
+}

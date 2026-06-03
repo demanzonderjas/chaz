@@ -8,6 +8,7 @@ type Props = {
   currentIndex: number;
   annotations?: MoveAnnotation[];
   onSelect: (index: number) => void;
+  variationStart?: number;
 };
 
 const ANNOTATION_ICONS: Record<string, { symbol: string; className: string; title: string }> = {
@@ -45,32 +46,32 @@ function MoveAnnotations({ annotation }: { annotation?: MoveAnnotation }) {
   );
 }
 
-const MoveButton = ({ index, move, activeRef, currentIndex, annotation, onSelect }: any) => {
-  const active = index === currentIndex, score = annotation?.score;
-  const bg = active ? 'bg-blue-600 text-white' : 'hover:bg-zinc-700 text-zinc-100';
+const MoveButton = ({ index, move, activeRef, currentIndex, annotation, onSelect, variationStart }: any) => {
+  const active = index === currentIndex, isVar = variationStart !== undefined && variationStart !== -1 && index > variationStart;
+  const bg = active ? 'bg-blue-600 text-white' : `hover:bg-zinc-700 ${isVar ? 'text-blue-400 italic font-semibold' : 'text-zinc-100'}`;
   return (
     <button ref={active ? activeRef : null} onClick={() => onSelect(index)} className={`w-full px-2 py-0.5 rounded flex items-center justify-between cursor-pointer ${bg}`}>
       <div className="flex items-center gap-1 min-w-0"><span className="truncate">{move}</span><MoveAnnotations annotation={annotation} /></div>
-      {score !== undefined && <span className={`text-[10px] font-semibold shrink-0 ${active ? 'text-blue-200' : 'text-zinc-500'}`}>{formatScore(score)}</span>}
+      {annotation?.score !== undefined && <span className={`text-[10px] font-semibold ${active ? 'text-blue-200' : 'text-zinc-500'}`}>{formatScore(annotation.score)}</span>}
     </button>
   );
 };
 
-const MoveRow = ({ pairIdx, white, black, currentIndex, annotations, activeRef, onSelect }: any) => (
+const MoveRow = ({ pairIdx, white, black, currentIndex, annotations, activeRef, onSelect, variationStart }: any) => (
   <tr className="border-b border-zinc-800">
     <td className="px-2 py-1 text-zinc-500 w-8 select-none">{pairIdx + 1}.</td>
-    <td className="px-1 py-1 w-1/2"><MoveButton index={pairIdx * 2} move={white} activeRef={activeRef} currentIndex={currentIndex} annotation={annotations?.[pairIdx * 2]} onSelect={onSelect} /></td>
-    <td className="px-1 py-1 w-1/2">{black !== undefined && <MoveButton index={pairIdx * 2 + 1} move={black} activeRef={activeRef} currentIndex={currentIndex} annotation={annotations?.[pairIdx * 2 + 1]} onSelect={onSelect} />}</td>
+    <td className="px-1 py-1 w-1/2"><MoveButton index={pairIdx * 2} move={white} activeRef={activeRef} currentIndex={currentIndex} annotation={annotations?.[pairIdx * 2]} onSelect={onSelect} variationStart={variationStart} /></td>
+    <td className="px-1 py-1 w-1/2">{black !== undefined && <MoveButton index={pairIdx * 2 + 1} move={black} activeRef={activeRef} currentIndex={currentIndex} annotation={annotations?.[pairIdx * 2 + 1]} onSelect={onSelect} variationStart={variationStart} />}</td>
   </tr>
 );
 
-export function MoveList({ sanMoves, currentIndex, annotations, onSelect }: Props) {
+export function MoveList({ sanMoves, currentIndex, annotations, onSelect, variationStart }: Props) {
   const activeRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => { activeRef.current?.scrollIntoView({ block: 'nearest' }); }, [currentIndex]);
   const pairs = sanMoves.filter((_, i) => i % 2 === 0).map((m, i) => [m, sanMoves[i * 2 + 1]]);
   return (
     <div className="h-full overflow-y-auto font-mono text-sm"><table className="w-full border-collapse">
-      <tbody>{pairs.map(([w, b], idx) => <MoveRow key={idx} pairIdx={idx} white={w} black={b} currentIndex={currentIndex} annotations={annotations} activeRef={activeRef} onSelect={onSelect} />)}</tbody>
+      <tbody>{pairs.map(([w, b], idx) => <MoveRow key={idx} pairIdx={idx} white={w} black={b} currentIndex={currentIndex} annotations={annotations} activeRef={activeRef} onSelect={onSelect} variationStart={variationStart} />)}</tbody>
     </table></div>
   );
 }

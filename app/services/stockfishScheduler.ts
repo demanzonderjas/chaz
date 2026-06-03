@@ -1,4 +1,17 @@
+import { Chess } from 'chess.js';
+
+export type PvLine = {
+  multipv: number;
+  depth: number;
+  score: number | null;
+  mate: number | null;
+  pv: string[];
+  bestMove: string | null;
+  hasSacrifice?: boolean;
+};
+
 export type EvalResult = {
+  lines?: PvLine[];
   depth: number;
   score: number | null;
   mate: number | null;
@@ -30,6 +43,7 @@ class StockfishScheduler {
   private checkingCache = false;
   private liveTask: LiveTask | null = null;
   private lastLiveResult: EvalResult | null = null;
+  private liveLines: PvLine[] = [];
   private annotationQueue: AnnotationTask[] = [];
   private activeAnnotation: AnnotationTask | null = null;
   private lastAnnotationScore = 0;
@@ -78,22 +92,45 @@ class StockfishScheduler {
   private handleInfo(line: string) {
     if (!line.includes('score')) return;
     if (this.liveTask) {
-      const res = this.parseLiveInfo(line, this.liveTask.color);
-      this.lastLiveResult = res;
-      this.liveTask.onInfo(res);
+      const pvLine = this.parsePvLine(line, this.liveTask.color);
+      this.accumulateLiveLine(pvLine);
     } else if (this.activeAnnotation) {
       this.lastAnnotationScore = this.parseAnnotationScore(line, this.activeAnnotation.color);
     }
   }
 
-  private parseLiveInfo(line: string, color: 'w' | 'b'): EvalResult {
+  private parsePvLine(line: string, color: 'w' | 'b'): PvLine {
     const depth = parseInt(line.match(/depth (\d+)/)?.[1] ?? '0');
+    const multipv = parseInt(line.match(/multipv (\d+)/)?.[1] ?? '1');
     const pv = line.match(/ pv (.+)/)?.[1]?.trim().split(' ') ?? [];
     const cpRaw = line.match(/score cp (-?\d+)/)?.[1];
     const mtRaw = line.match(/score mate (-?\d+)/)?.[1];
     const score = cpRaw ? (color === 'w' ? +cpRaw : -+cpRaw) : null;
     const mate = mtRaw ? (color === 'w' ? +mtRaw : -+mtRaw) : null;
-    return { depth, score: mtRaw ? null : score, mate, pv, bestMove: pv[0] ?? null };
+    return { multipv, depth, score: mtRaw ? null : score, mate, pv, bestMove: pv[0] ?? null };
+  }
+
+  private accumulateLiveLine(line: PvLine) {
+    if (this.lastLiveResult && line.depth > this.lastLiveResult.depth) {
+      this.liveLines = [];
+    }
+    line.hasSacrifice = hasSacrificeInPV(this.liveTask!.fen, line.pv, this.liveTask!.color);
+    this.liveLines[line.multipv - 1] = line;
+    const res = this.buildLiveResult(line);
+    this.lastLiveResult = res;
+    this.liveTask?.onInfo(res);
+  }
+
+  private buildLiveResult(line: PvLine): EvalResult {
+    const mainLine = this.liveLines[0] || line;
+    return {
+      depth: line.depth,
+      score: mainLine.score,
+      mate: mainLine.mate,
+      bestMove: mainLine.bestMove,
+      pv: mainLine.pv,
+      lines: this.liveLines.filter(Boolean),
+    };
   }
 
   private parseAnnotationScore(line: string, color: 'w' | 'b'): number {
@@ -173,6 +210,8 @@ class StockfishScheduler {
   }
 
   private sendSearch(fen: string, depth: number) {
+    const multipv = this.liveTask ? 4 : 1;
+    this.worker?.postMessage(`setoption name MultiPV value ${multipv}`);
     this.worker?.postMessage(`position fen ${fen}`);
     this.worker?.postMessage(`go depth ${depth}`);
     this.isSearching = true;
@@ -188,10 +227,7 @@ class StockfishScheduler {
   }
 
   private async runLiveTask(task: LiveTask) {
-    this.checkingCache = true;
-    const cached = await this.checkCache(task.fen, task.depth, task.color);
-    this.checkingCache = false;
-    this.handleLiveCacheResult(task, cached);
+    this.sendSearch(task.fen, task.depth);
   }
 
   private handleLiveCacheResult(task: LiveTask, cached: EvalResult | null) {
@@ -306,6 +342,25 @@ class StockfishScheduler {
       result: { bestMove: res.bestMove, pv: res.pv, depth: res.depth, cp, mate }
     };
   }
+}
+
+function getMaterialBalance(fen: string): number {
+  const board = fen.split(' ')[0];
+  const values: Record<string, number> = {
+    p: -1, n: -3, b: -3, r: -5, q: -9,
+    P: 1, N: 3, B: 3, R: 5, Q: 9
+  };
+  return [...board].reduce((acc, char) => acc + (values[char] || 0), 0);
+}
+
+function hasSacrificeInPV(startFen: string, pv: string[], color: 'w' | 'b'): boolean {
+  try {
+    const chess = new Chess(startFen);
+    const startBal = getMaterialBalance(startFen) * (color === 'w' ? 1 : -1);
+    pv.forEach((m) => chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] }));
+    const endBal = getMaterialBalance(chess.fen()) * (color === 'w' ? 1 : -1);
+    return endBal < startBal;
+  } catch { return false; }
 }
 
 const stockfishScheduler = new StockfishScheduler();
