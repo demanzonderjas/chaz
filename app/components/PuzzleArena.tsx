@@ -58,25 +58,23 @@ interface Puzzle {
 
 function getEvalLabel(ev: any): string {
   if (!ev) return '';
-  if (ev.mate !== undefined && ev.mate !== null) {
-    return `M${Math.abs(ev.mate)}`;
-  }
-  if (ev.cp !== undefined && ev.cp !== null) {
-    const val = ev.cp / 100;
-    return (val >= 0 ? '+' : '') + val.toFixed(2);
-  }
-  return '';
+  if (ev.mate !== undefined && ev.mate !== null) return `M${Math.abs(ev.mate)}`;
+  const cpVal = ev.cp ?? ev.score;
+  if (cpVal === undefined || cpVal === null) return '';
+  const val = cpVal / 100;
+  return (val >= 0 ? '+' : '') + val.toFixed(2);
 }
 
 function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
   if (uci === puzzle.solution_uci) return true;
-  if (!ev || !ev.lines) return false;
-  const best = ev.lines[0], cand = ev.lines.find((l: any) => l.pv && l.pv[0] === uci);
+  const lines = ev?.candidates || ev?.lines;
+  const best = lines?.[0], cand = lines?.find((l: any) => l.pv?.[0] === uci);
   if (!best || !cand) return false;
   if (best.mate !== null && best.mate !== undefined) {
     return cand.mate !== null && cand.mate !== undefined;
   }
-  return (best.score ?? 0) - (cand.score ?? 0) <= 50;
+  const diff = (best.score ?? best.cp ?? 0) - (cand.score ?? cand.cp ?? 0);
+  return diff <= 50;
 }
 
 async function fetchNextPuzzle(setPuzzle: any, setEval: any, setBook: any, setBoard: any, setStatus: any) {
@@ -102,7 +100,8 @@ function getSan(fen: string, uci: string): string {
 }
 
 const CandidateItem = ({ line, startFen, idx }: any) => {
-  const score = line.mate !== null ? `M${Math.abs(line.mate)}` : `${(line.score / 100).toFixed(2)}`;
+  const cpVal = line.score ?? line.cp ?? 0;
+  const score = line.mate !== null && line.mate !== undefined ? `M${Math.abs(line.mate)}` : `${(cpVal / 100).toFixed(2)}`;
   return (
     <div className="flex justify-between text-zinc-300 font-mono text-xs">
       <span>{idx + 1}. {getSan(startFen, line.pv[0])}</span>
@@ -112,11 +111,12 @@ const CandidateItem = ({ line, startFen, idx }: any) => {
 };
 
 const CandidateMovesList = ({ evaluation, startFen }: { evaluation: any; startFen: string }) => {
-  if (!evaluation?.lines) return null;
+  const lines = evaluation?.candidates || evaluation?.lines;
+  if (!lines) return null;
   return (
-    <div className="mt-4 p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+    <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg">
       <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Candidate Moves</div>
-      <div className="space-y-1">{evaluation.lines.slice(0, 4).map((l: any, i: number) => <CandidateItem key={i} line={l} startFen={startFen} idx={i} />)}</div>
+      <div className="space-y-1">{lines.slice(0, 4).map((l: any, i: number) => <CandidateItem key={i} line={l} startFen={startFen} idx={i} />)}</div>
     </div>
   );
 };
