@@ -287,6 +287,8 @@ class StockfishScheduler {
     this.annotationQueue = [];
     this.totalAnnotationTasks = 0;
     this.activeAnnotation = null;
+    this.onProgressCallback = null;
+    this.onFinishedCallback = null;
   }
 
   public registerCallbacks(

@@ -88,9 +88,9 @@ const registerSchedulerCallbacks = (ctx: AnalysisContext) => {
   );
 };
 
-const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[]) => {
+const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN) => {
   const positions = history.map((h, i) => ({
-    fen: i === 0 ? STARTING_FEN : history[i - 1].fen,
+    fen: i === 0 ? startFen : history[i - 1].fen,
     san: h.san,
   }));
   const bookIndices = await fetchBookIndices(positions);
@@ -99,15 +99,15 @@ const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[]
   })));
 };
 
-export const analyzeGameImpl = async (ctx: AnalysisContext, history: HistoryEntry[]) => {
+export const analyzeGameImpl = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN) => {
   if (!history.length) return;
   ctx.setAnalyzing(true);
   ctx.setProgress(0);
   ctx.scoresRef.current = {};
-  await initBookAnnotations(ctx, history);
-  const fens = [STARTING_FEN, ...history.map((h) => h.fen)];
-  stockfishScheduler.addAnnotationTasks(createAnnotationTasks(ctx, fens));
+  await initBookAnnotations(ctx, history, startFen);
   registerSchedulerCallbacks(ctx);
+  const tasks = createAnnotationTasks(ctx, [startFen, ...history.map((h) => h.fen)]);
+  stockfishScheduler.addAnnotationTasks(tasks);
 };
 
 const pushTaskIfNeeded = (ctx: AnalysisContext, tasks: AnnotationTask[], idx: number, fen: string) => {
@@ -132,9 +132,9 @@ const queueMoveEvaluation = (ctx: AnalysisContext, i: number, before: string, af
   }
 };
 
-export const analyzeLastMoveImpl = async (ctx: AnalysisContext, history: HistoryEntry[]) => {
+export const analyzeLastMoveImpl = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN) => {
   if (!history.length) return;
-  const i = history.length - 1, before = i === 0 ? STARTING_FEN : history[i - 1].fen;
+  const i = history.length - 1, before = i === 0 ? startFen : history[i - 1].fen;
   const books = await fetchBookIndices([{ fen: before, san: history[i].san }]);
   ctx.setAnnotations((prev) => Object.assign([...prev], { [i]: { types: books.has(0) ? ['book'] : [] } }));
   queueMoveEvaluation(ctx, i, before, history[i].fen);
@@ -152,8 +152,8 @@ export function useGameAnalysis() {
   const [analyzing, setAnalyzing] = useState(false), [progress, setProgress] = useState(0);
   const scoresRef = useRef<Record<number, number>>({});
   const ctx = { setAnnotations, setAnalyzing, setProgress, scoresRef };
-  const analyzeGame = useCallback((h: HistoryEntry[]) => analyzeGameImpl(ctx, h), []);
-  const analyzeLastMove = useCallback((h: HistoryEntry[]) => analyzeLastMoveImpl(ctx, h), []);
+  const analyzeGame = useCallback((h: HistoryEntry[], sf?: string) => analyzeGameImpl(ctx, h, sf), []);
+  const analyzeLastMove = useCallback((h: HistoryEntry[], sf?: string) => analyzeLastMoveImpl(ctx, h, sf), []);
   const reset = useCallback(() => resetGameAnalysis(ctx), []);
   return { annotations, analyzing, progress, analyzeGame, analyzeLastMove, reset };
 }

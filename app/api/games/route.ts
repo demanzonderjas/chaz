@@ -16,7 +16,7 @@ async function fetchGamePgn(id: string) {
 }
 
 async function fetchGamesList() {
-  const sql = 'SELECT id, white_name, black_name, result, played_date, user_color, move_count FROM games ORDER BY played_date DESC';
+  const sql = 'SELECT id, white_name, black_name, result, played_date, user_color, move_count FROM games ORDER BY played_date DESC, id DESC';
   const rs = await turso.execute(sql);
   return rs.rows;
 }
@@ -96,7 +96,8 @@ async function indexGameMoves(pgn: string, result: string, userColor: string) {
   const chess = new Chess();
   chess.loadPgn(pgn.trim());
   const history = chess.history({ verbose: true });
-  const tempChess = new Chess();
+  const startFen = chess.header().FEN || chess.header().Fen;
+  const tempChess = startFen ? new Chess(startFen) : new Chess();
   const outcome = getMoveOutcome(result, userColor);
   for (const m of history) {
     await processMove(m, tempChess, outcome);
@@ -117,6 +118,21 @@ export async function POST(req: NextRequest) {
     const { pgn } = await req.json();
     const result = await handleImport(pgn);
     return NextResponse.json(result);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
+}
+
+async function deleteGameFromDb(id: string) {
+  await turso.execute({ sql: 'DELETE FROM games WHERE id = ?', args: [id] });
+}
+
+export async function DELETE(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get('id');
+  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+  try {
+    await deleteGameFromDb(id);
+    return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

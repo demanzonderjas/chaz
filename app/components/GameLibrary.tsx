@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 
 interface Props {
   isOpen: boolean;
@@ -27,10 +27,11 @@ async function fetchGames(setGames: any, setLoading: any) {
 function useGamesList(isOpen: boolean) {
   const [games, setGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const refresh = useCallback(() => fetchGames(setGames, setLoading), []);
   useEffect(() => {
-    if (isOpen) fetchGames(setGames, setLoading);
-  }, [isOpen]);
-  return { games, loading };
+    if (isOpen) refresh();
+  }, [isOpen, refresh]);
+  return { games, loading, refresh };
 }
 
 function getOutcome(res: string, color: string) {
@@ -45,10 +46,13 @@ function getOutcomeStyles(outcome: string) {
   return 'bg-zinc-800 text-zinc-400 border border-zinc-700';
 }
 
-const GameHeader = ({ date, moves }: any) => (
-  <div className="flex justify-between text-xs text-zinc-500 mb-1">
+const GameHeader = ({ date, moves, onDelete }: any) => (
+  <div className="flex justify-between text-[11px] text-zinc-500 mb-1 items-center">
     <span>{date}</span>
-    <span className="font-semibold">{moves} moves</span>
+    <div className="flex items-center gap-2">
+      <span className="font-semibold">{moves} moves</span>
+      <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="text-zinc-500 hover:text-rose-450 hover:scale-105 active:scale-95 transition-all p-0.5 cursor-pointer text-xs" title="Delete game">🗑️</button>
+    </div>
   </div>
 );
 
@@ -63,12 +67,12 @@ const GameTags = ({ outcome, result, outcomeStyles, color }: any) => (
   </div>
 );
 
-const GameCard = ({ game, onClick }: any) => {
+const GameCard = ({ game, onClick, onDelete }: any) => {
   const outcome = getOutcome(game.result, game.user_color);
   return (
-    <div onClick={onClick} className="p-3 mb-2 rounded bg-zinc-900 border border-zinc-800 hover:border-zinc-750 hover:bg-zinc-900/80 cursor-pointer transition-all">
-      <GameHeader date={game.played_date} moves={game.move_count} />
-      <div className="text-sm font-semibold text-zinc-200 truncate">{game.white_name} vs {game.black_name}</div>
+    <div onClick={onClick} className="p-3 mb-2 rounded bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/80 cursor-pointer transition-all">
+      <GameHeader date={game.played_date} moves={game.move_count} onDelete={onDelete} />
+      <div className="text-sm font-semibold text-zinc-200 truncate pr-6">{game.white_name} vs {game.black_name}</div>
       <GameTags outcome={outcome} result={game.result} outcomeStyles={getOutcomeStyles(outcome)} color={game.user_color} />
     </div>
   );
@@ -81,10 +85,10 @@ const DrawerHeader = ({ onClose }: any) => (
   </div>
 );
 
-const DrawerBody = ({ loading, games, onSelectGame, onClose }: any) => (
+const DrawerBody = ({ loading, games, onSelectGame, onClose, onDelete }: any) => (
   <div className="flex-1 overflow-y-auto p-4">
     {loading ? <div className="text-center text-xs text-zinc-500 py-8">Loading games...</div> :
-      games.map((g: any) => <GameCard key={g.id} game={g} onClick={() => handleGameClick(g.id, onSelectGame, onClose)} />)}
+      games.map((g: any) => <GameCard key={g.id} game={g} onClick={() => handleGameClick(g.id, onSelectGame, onClose)} onDelete={() => onDelete(g.id)} />)}
   </div>
 );
 
@@ -99,10 +103,10 @@ const DrawerPanel = ({ isOpen, onClose, children }: any) => (
 );
 
 export function GameLibrary({ isOpen, onClose, onSelectGame }: Props) {
-  const { games, loading } = useGamesList(isOpen);
-  return (
-    <DrawerPanel isOpen={isOpen} onClose={onClose}>
-      <DrawerBody loading={loading} games={games} onSelectGame={onSelectGame} onClose={onClose} />
-    </DrawerPanel>
-  );
+  const { games, loading, refresh } = useGamesList(isOpen);
+  const del = useCallback(async (id: number) => {
+    if ((await fetch(`/api/games?id=${id}`, { method: 'DELETE' })).ok) refresh();
+  }, [refresh]);
+  const body = <DrawerBody loading={loading} games={games} onSelectGame={onSelectGame} onClose={onClose} onDelete={del} />;
+  return <DrawerPanel isOpen={isOpen} onClose={onClose}>{body}</DrawerPanel>;
 }

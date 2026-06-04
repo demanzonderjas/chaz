@@ -21,9 +21,35 @@ const ANNOTATION_ICONS: Record<string, { symbol: string; bg: string; text: strin
   blunder:   { symbol: '??', bg: '#dc2626', text: '#ffffff' },
 };
 
+interface GameMeta {
+  white: string;
+  black: string;
+  result: string;
+  date: string;
+}
+
+function getResultStyle(res: string) {
+  if (res === '1-0') return 'bg-emerald-950/60 text-emerald-400 border border-emerald-800';
+  if (res === '0-1') return 'bg-rose-950/60 text-rose-400 border border-rose-800';
+  return 'bg-zinc-800 text-zinc-400 border border-zinc-700';
+}
+
+const ActiveGameHeader = ({ game, onClear }: any) => (
+  <div className="flex items-center justify-between px-6 py-2.5 bg-zinc-900/60 border-b border-zinc-800 backdrop-blur-md shrink-0">
+    <div className="flex items-center gap-4">
+      <span className="text-sm font-semibold text-zinc-100 flex items-center gap-2">⚪ {game.white} <span className="text-zinc-500 font-light">vs</span> ⚫ {game.black}</span>
+      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${getResultStyle(game.result)}`}>{game.result}</span>
+      <span className="text-xs text-zinc-500">📅 {game.date}</span>
+    </div>
+    <button onClick={onClear} className="text-zinc-500 hover:text-rose-450 text-xs px-2.5 py-1 rounded bg-zinc-800/80 hover:bg-rose-950/40 hover:border-rose-905 border border-zinc-705 transition-all cursor-pointer">Unload Game</button>
+  </div>
+);
+
 export function ChessAnalysis() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [cursor, setCursor] = useState(-1);
+  const [initialFen, setInitialFen] = useState(STARTING_FEN);
+  const [activeGame, setActiveGame] = useState<GameMeta | null>(null);
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
   const [pgnInput, setPgnInput] = useState('');
   const [pgnError, setPgnError] = useState('');
@@ -33,10 +59,10 @@ export function ChessAnalysis() {
   const [hoveredBook, setHoveredBook] = useState<string | null>(null);
 
   const { ready, evaluation, analyse } = useStockfish();
-  const { moves: bookMoves, inBook } = useBookMoves(cursor < 0 ? STARTING_FEN : history[cursor]?.fen ?? STARTING_FEN);
+  const { moves: bookMoves, inBook } = useBookMoves(cursor < 0 ? initialFen : history[cursor]?.fen ?? initialFen);
   const { annotations, analyzing, progress, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
-  const currentFen = cursor < 0 ? STARTING_FEN : history[cursor].fen;
+  const currentFen = cursor < 0 ? initialFen : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
 
   useEffect(() => {
@@ -60,14 +86,13 @@ export function ChessAnalysis() {
   // Interactive piece drop
   const onPieceDrop = useCallback(
     ({ sourceSquare, targetSquare, piece }: any) => {
-      if (!targetSquare) return false;
       const promo = getPromotionPiece(piece.pieceType, targetSquare);
       const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
       if (!entry) return false;
-      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove);
+      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen);
       return true;
     },
-    [currentFen, cursor, analyzeLastMove]
+    [currentFen, cursor, analyzeLastMove, initialFen]
   );
 
   const playUciMove = useCallback((uci: string) => {
@@ -76,17 +101,18 @@ export function ChessAnalysis() {
     const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
     setHistory(next);
     setCursor(next.length - 1);
-    setTimeout(() => analyzeLastMove(next), 0);
-  }, [currentFen, cursor, history, analyzeLastMove]);
+    setTimeout(() => analyzeLastMove(next, initialFen), 0);
+  }, [currentFen, cursor, history, analyzeLastMove, initialFen]);
 
   const loadRawPgn = useCallback((pgn: string) => {
-    const entries = parsePgnMoves(pgn);
-    setOrientation(getPlayerOrientation(pgn));
+    const { sf, entries } = parsePgn(pgn);
+    setInitialFen(sf);
     setHistory(entries);
     setCursor(-1);
     resetAnalysis();
-    analyzeGame(entries);
-    fetch('/api/games', { method: 'POST', body: JSON.stringify({ pgn }) }).catch(console.error);
+    analyzeGame(entries, sf);
+    saveGamePgn(pgn);
+    setupGameMeta(pgn, setOrientation, setActiveGame);
   }, [analyzeGame, resetAnalysis]);
 
   // PGN load
@@ -185,7 +211,7 @@ export function ChessAnalysis() {
                 Analyzing… {progress}%
               </span>
             ) : annotations.length > 0 ? (
-              <button onClick={() => analyzeGame(history)}
+              <button onClick={() => analyzeGame(history, initialFen)}
                 className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors">
                 Re-analyze
               </button>
@@ -203,12 +229,13 @@ export function ChessAnalysis() {
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Flip ⇅
           </button>
-          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); }}
+          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); }}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Reset
           </button>
         </div>
       </header>
+      {activeGame && <ActiveGameHeader game={activeGame} onClear={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); }} />}
 
       {/* PGN panel */}
       {showPgnPanel && (
@@ -434,14 +461,37 @@ function tryMakeMove(chess: Chess, uci: string) {
   }
 }
 
-function parsePgnMoves(pgn: string): HistoryEntry[] {
+function parsePgn(pgn: string) {
   const chess = new Chess();
   chess.loadPgn(pgn.trim());
-  const replay = new Chess();
-  return chess.history({ verbose: true }).map((m) => {
+  const sf = chess.header().FEN || chess.header().Fen || STARTING_FEN;
+  const replay = sf !== STARTING_FEN ? new Chess(sf) : new Chess();
+  const entries = chess.history({ verbose: true }).map((m) => {
     replay.move(m.san);
     return { fen: replay.fen(), san: m.san, to: m.to };
   });
+  return { sf, entries };
+}
+
+function saveGamePgn(pgn: string) {
+  fetch('/api/games', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pgn }),
+  }).catch(console.error);
+}
+
+function parseGameMeta(pgn: string): GameMeta {
+  const chess = new Chess();
+  chess.loadPgn(pgn.trim());
+  const h = chess.header();
+  const white = h.White || 'Unknown', black = h.Black || 'Unknown';
+  return { white, black, result: h.Result || '*', date: h.Date || 'Unknown' };
+}
+
+function setupGameMeta(pgn: string, setOrientation: any, setActiveGame: any) {
+  setOrientation(getPlayerOrientation(pgn));
+  setActiveGame(parseGameMeta(pgn));
 }
 
 function getPlayerOrientation(pgn: string): 'white' | 'black' {
@@ -511,10 +561,10 @@ function executeMove(fen: string, from: string, to: string, promo?: string) {
   }
 }
 
-function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any) {
+function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any, initialFen: string) {
   setHistory((prev: HistoryEntry[]) => {
     const next = [...prev.slice(0, cursor + 1), entry];
-    setTimeout(() => analyzeLastMove(next), 0);
+    setTimeout(() => analyzeLastMove(next, initialFen), 0);
     return next;
   });
   setCursor((c: number) => c + 1);
