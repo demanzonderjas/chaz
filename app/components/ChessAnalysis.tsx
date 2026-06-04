@@ -36,12 +36,21 @@ function getResultStyle(res: string) {
   return 'bg-zinc-800 text-zinc-400 border border-zinc-700';
 }
 
-const ActiveGameHeader = ({ game, onClear }: any) => (
+const ActiveGameHeader = ({ game, onClear, relevantBookLine, onExploreBookLine }: any) => (
   <div className="flex items-center justify-between px-6 py-2.5 bg-zinc-900/60 border-b border-zinc-800 backdrop-blur-md shrink-0">
-    <div className="flex items-center gap-4">
+    <div className="flex items-center gap-4 flex-wrap">
       <span className="text-sm font-semibold text-zinc-100 flex items-center gap-2">⚪ {game.white} <span className="text-zinc-500 font-light">vs</span> ⚫ {game.black}</span>
       <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${getResultStyle(game.result)}`}>{game.result}</span>
       <span className="text-xs text-zinc-500">📅 {game.date}</span>
+      {relevantBookLine && (
+        <button
+          onClick={onExploreBookLine}
+          className="text-xs text-blue-400 hover:text-blue-300 hover:underline font-semibold flex items-center gap-1 cursor-pointer transition-all"
+          title="Explore opening line"
+        >
+          📖 {relevantBookLine.name}
+        </button>
+      )}
     </div>
     <button onClick={onClear} className="text-zinc-500 hover:text-rose-450 text-xs px-2.5 py-1 rounded bg-zinc-800/80 hover:bg-rose-950/40 hover:border-rose-905 border border-zinc-705 transition-all cursor-pointer">Unload Game</button>
   </div>
@@ -60,23 +69,36 @@ export function ChessAnalysis() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [baseState, setBaseState] = useState<{ history: HistoryEntry[]; cursor: number } | null>(null);
   const [hoveredBook, setHoveredBook] = useState<string | null>(null);
+  const [relevantBookLine, setRelevantBookLine] = useState<any | null>(null);
+  const [explorerLine, setExplorerLine] = useState<any | null>(null);
+  const [explorerMoveIdx, setExplorerMoveIdx] = useState<number>(-1);
 
   const { ready, evaluation, analyse } = useStockfish();
-  const { moves: bookMoves, inBook } = useBookMoves(cursor < 0 ? initialFen : history[cursor]?.fen ?? initialFen);
   const { annotations, analyzing, progress, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
   const currentFen = cursor < 0 ? initialFen : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
 
+  const explorerFen = explorerLine 
+    ? (explorerMoveIdx === -1 ? explorerLine.start_fen : explorerLine.moves[explorerMoveIdx].fen_after)
+    : null;
+  const boardFen = explorerFen || currentFen;
+  const boardColor = explorerFen
+    ? (explorerFen.split(' ')[1] as 'w' | 'b')
+    : currentColor;
+
+  const { moves: bookMoves, inBook } = useBookMoves(boardFen);
+
   useEffect(() => {
     if (!ready) return;
-    analyse(currentFen, currentColor, 16);
-  }, [ready, currentFen, currentColor, analyse]);
+    analyse(boardFen, boardColor, 16);
+  }, [ready, boardFen, boardColor, analyse]);
 
   // Keyboard navigation
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (explorerLine) return; // Skip game arrow keys if in explorer
       if (e.key === 'ArrowLeft') setCursor((c) => Math.max(-1, c - 1));
       else if (e.key === 'ArrowRight') setCursor((c) => Math.min(history.length - 1, c + 1));
       else if (e.key === 'ArrowUp') setCursor(-1);
@@ -84,7 +106,33 @@ export function ChessAnalysis() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [history.length]);
+  }, [history.length, explorerLine]);
+
+  // Keyboard navigation for explorer line
+  useEffect(() => {
+    if (!explorerLine) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (explorerMoveIdx > -1) {
+          const nextIdx = explorerMoveIdx - 1;
+          setExplorerMoveIdx(nextIdx);
+          playMoveSound(false);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (explorerMoveIdx < explorerLine.moves.length - 1) {
+          const nextIdx = explorerMoveIdx + 1;
+          setExplorerMoveIdx(nextIdx);
+          const nextMove = explorerLine.moves[nextIdx];
+          playMoveSound(nextMove.san.includes('x'));
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [explorerLine, explorerMoveIdx]);
 
   const prevCursorRef = useRef(cursor);
   const prevHistoryRef = useRef(history);
@@ -121,9 +169,27 @@ export function ChessAnalysis() {
     }
   }, [analyzing, activeGame?.id, history.length]);
 
+  useEffect(() => {
+    if (!activeGame?.id) {
+      setRelevantBookLine(null);
+      return;
+    }
+    fetch(`/api/book-line-for-game?gameId=${activeGame.id}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.bookLine) {
+          setRelevantBookLine(data.bookLine);
+        } else {
+          setRelevantBookLine(null);
+        }
+      })
+      .catch(() => setRelevantBookLine(null));
+  }, [activeGame?.id]);
+
   // Interactive piece drop
   const onPieceDrop = useCallback(
     ({ sourceSquare, targetSquare, piece }: any) => {
+      setExplorerLine(null);
       const promo = getPromotionPiece(piece.pieceType, targetSquare);
       const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
       if (!entry) return false;
@@ -134,6 +200,7 @@ export function ChessAnalysis() {
   );
 
   const playUciMove = useCallback((uci: string) => {
+    setExplorerLine(null);
     const chess = new Chess(currentFen), m = tryMakeMove(chess, uci);
     if (!m) return;
     const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
@@ -248,6 +315,21 @@ export function ChessAnalysis() {
     return (cp >= 0 ? '+' : '') + cp.toFixed(2);
   };
 
+  const bookLineActiveIdx = (() => {
+    if (!relevantBookLine) return -2;
+    const normBoard = normalizeBookFen(boardFen);
+    if (normBoard === normalizeBookFen(relevantBookLine.start_fen || STARTING_FEN)) {
+      return -1;
+    }
+    const moves = relevantBookLine.moves || [];
+    for (let i = 0; i < moves.length; i++) {
+      if (normalizeBookFen(moves[i].fen_after) === normBoard) {
+        return i;
+      }
+    }
+    return -2;
+  })();
+
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       {/* Header */}
@@ -259,9 +341,21 @@ export function ChessAnalysis() {
             {ready ? <span className="text-green-500">● ready</span> : <span className="text-yellow-500">● loading…</span>}
           </span>
           {inBook && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/60 text-blue-300 border border-blue-700">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/60 text-blue-300 border border-blue-700 font-medium">
               📖 in book
             </span>
+          )}
+          {relevantBookLine && (
+            <button 
+              onClick={() => {
+                setExplorerLine(relevantBookLine);
+                setExplorerMoveIdx(-1);
+              }}
+              className="text-xs px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-blue-955/40 border border-zinc-700 hover:border-blue-900 text-zinc-300 hover:text-blue-300 transition-all cursor-pointer font-medium"
+              title="Open opening line explorer"
+            >
+              📖 Explore Opening: {relevantBookLine.name}
+            </button>
           )}
         </div>
         <div className="flex gap-2">
@@ -299,7 +393,23 @@ export function ChessAnalysis() {
           </button>
         </div>
       </header>
-      {activeGame && <ActiveGameHeader game={activeGame} onClear={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); }} />}
+      {activeGame && (
+        <ActiveGameHeader 
+          game={activeGame} 
+          relevantBookLine={relevantBookLine}
+          onExploreBookLine={() => {
+            setExplorerLine(relevantBookLine);
+            setExplorerMoveIdx(-1);
+          }}
+          onClear={() => { 
+            setHistory([]); 
+            setCursor(-1); 
+            resetAnalysis(); 
+            setInitialFen(STARTING_FEN); 
+            setActiveGame(null); 
+          }} 
+        />
+      )}
 
       {/* PGN panel */}
       {showPgnPanel && (
@@ -330,7 +440,7 @@ export function ChessAnalysis() {
           <div className="relative aspect-square" style={{ width: 'min(calc(100vh - 280px), calc(100vw - 560px))' }}>
             <ChessboardProvider
               options={{
-                position: currentFen,
+                position: boardFen,
                 boardOrientation: orientation,
                 arrows: [],
                 allowDrawingArrows: true,
@@ -346,7 +456,7 @@ export function ChessAnalysis() {
             <CustomBoardArrows arrows={arrows} orientation={orientation} />
           </div>
           <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 560px))' }}>
-            <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => setCursor(i)} />
+            <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => { setCursor(i); setExplorerLine(null); }} />
           </div>
         </div>
 
@@ -371,17 +481,76 @@ export function ChessAnalysis() {
             <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto pr-1">
               {evaluation.lines && evaluation.lines.length > 0 ? (
                 evaluation.lines.slice(0, 4).map((line, idx) => (
-                  <EngineLineRow key={idx} line={line} startFen={currentFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
+                  <EngineLineRow key={idx} line={line} startFen={boardFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
                 ))
               ) : (
                 evaluation.pv.length > 0 && (
                   <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
-                    {pvToSan(currentFen, evaluation.pv).join(' ')}
+                    {pvToSan(boardFen, evaluation.pv).join(' ')}
                   </p>
                 )
               )}
             </div>
           </div>
+
+          {/* Book Line Explorer */}
+          {relevantBookLine && (
+            <div className="px-3 py-3 border-b border-zinc-800 bg-zinc-900 shrink-0 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Book Line Explorer</span>
+                {explorerLine && (
+                  <button 
+                    onClick={() => setExplorerLine(null)}
+                    className="text-[10px] px-2 py-0.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 rounded font-semibold border border-zinc-700 transition-colors cursor-pointer"
+                  >
+                    Exit Explorer
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <div 
+                  onClick={() => {
+                    if (!explorerLine) {
+                      setExplorerLine(relevantBookLine);
+                      setExplorerMoveIdx(-1);
+                    }
+                  }}
+                  className={`text-xs font-semibold truncate transition-colors cursor-pointer ${explorerLine ? 'text-blue-300 font-bold' : 'text-zinc-300 hover:text-zinc-100'}`} 
+                  title={relevantBookLine.name}
+                >
+                  📖 {relevantBookLine.name} {explorerLine && <span className="text-[9px] px-1 py-0.2 rounded bg-blue-950/80 border border-blue-900 text-blue-400 font-bold ml-1 uppercase tracking-wider">Active</span>}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <button 
+                    onClick={() => {
+                      playMoveSound(false);
+                      setExplorerLine(relevantBookLine);
+                      setExplorerMoveIdx(-1);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${bookLineActiveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-350'}`}
+                  >
+                    Start
+                  </button>
+                  {relevantBookLine.moves.map((move: any, moveIdx: number) => {
+                    const isCurrentMove = bookLineActiveIdx === moveIdx;
+                    return (
+                      <button
+                        key={moveIdx}
+                        onClick={() => {
+                          playMoveSound(move.san.includes('x'));
+                          setExplorerLine(relevantBookLine);
+                          setExplorerMoveIdx(moveIdx);
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                      >
+                        {move.san}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Book moves */}
           {bookMoves.length > 0 && (
@@ -417,7 +586,7 @@ export function ChessAnalysis() {
           )}
 
           {/* Db Explorer */}
-          <DbExplorer fen={currentFen} onSelectMove={playUciMove} />
+          <DbExplorer fen={boardFen} onSelectMove={playUciMove} />
 
           {/* Move list */}
           <div className="flex-1 overflow-hidden">
@@ -425,7 +594,7 @@ export function ChessAnalysis() {
               sanMoves={history.map((h) => h.san)}
               currentIndex={cursor}
               annotations={annotations}
-              onSelect={(i) => setCursor(i)}
+              onSelect={(i) => { setCursor(i); setExplorerLine(null); }}
               variationStart={baseState ? baseState.cursor : -1}
             />
           </div>
@@ -433,10 +602,10 @@ export function ChessAnalysis() {
           {/* Navigation */}
           <div className="flex gap-1 px-2 py-2 border-t border-zinc-800 shrink-0">
             {[
-              { label: '⏮', action: () => setCursor(-1), title: 'Start' },
-              { label: '◀', action: () => setCursor((c) => Math.max(-1, c - 1)), title: 'Prev (←)' },
-              { label: '▶', action: () => setCursor((c) => Math.min(history.length - 1, c + 1)), title: 'Next (→)' },
-              { label: '⏭', action: () => setCursor(history.length - 1), title: 'End' },
+              { label: '⏮', action: () => { setCursor(-1); setExplorerLine(null); }, title: 'Start' },
+              { label: '◀', action: () => { setCursor((c) => Math.max(-1, c - 1)); setExplorerLine(null); }, title: 'Prev (←)' },
+              { label: '▶', action: () => { setCursor((c) => Math.min(history.length - 1, c + 1)); setExplorerLine(null); }, title: 'Next (→)' },
+              { label: '⏭', action: () => { setCursor(history.length - 1); setExplorerLine(null); }, title: 'End' },
             ].map(({ label, action, title }) => (
               <button key={label} onClick={action} title={title}
                 className="flex-1 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-sm transition-colors">

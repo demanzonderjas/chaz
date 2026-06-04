@@ -1,83 +1,51 @@
 'use client';
 
-let audioCtx: AudioContext | null = null;
+let moveAudio: HTMLAudioElement | null = null;
+let captureAudio: HTMLAudioElement | null = null;
+let errorAudio: HTMLAudioElement | null = null;
 
-function getAudioContext(): AudioContext | null {
+function getAudio(type: 'move' | 'capture' | 'error'): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  
+  if (type === 'move') {
+    if (!moveAudio) moveAudio = new Audio('/sounds/move.mp3');
+    return moveAudio;
   }
-  return audioCtx;
+  if (type === 'capture') {
+    if (!captureAudio) captureAudio = new Audio('/sounds/capture.mp3');
+    return captureAudio;
+  }
+  if (type === 'error') {
+    if (!errorAudio) errorAudio = new Audio('/sounds/error.mp3');
+    return errorAudio;
+  }
+  return null;
 }
 
 export function playMoveSound(isCapture = false) {
-  const ctx = getAudioContext();
-  if (!ctx) return;
-
-  // Resume context if suspended (browser autoplay policy)
-  if (ctx.state === 'suspended') {
-    ctx.resume();
-  }
-
   try {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    
-    if (isCapture) {
-      // Sharp snap/clack for capture
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(180, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(20, ctx.currentTime + 0.08);
-      
-      gain.gain.setValueAtTime(0.4, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
-      
-      osc.start();
-      osc.stop(ctx.currentTime + 0.09);
-    } else {
-      // Soft wood knock for standard move
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(140, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(15, ctx.currentTime + 0.1);
-      
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-      
-      osc.start();
-      osc.stop(ctx.currentTime + 0.11);
+    const audio = getAudio(isCapture ? 'capture' : 'move');
+    if (audio) {
+      audio.currentTime = 0;
+      audio.play().catch(() => {
+        // Ignore autoplay blocks
+      });
     }
   } catch (e) {
-    // Ignore audio context play blockages
+    // Ignore audio play errors
   }
 }
 
 export function playErrorSound() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
-
-  if (ctx.state === 'suspended') {
-    ctx.resume();
-  }
-
   try {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    
-    // Low buzzer/thud for error
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(110, ctx.currentTime);
-    osc.frequency.linearRampToValueAtTime(70, ctx.currentTime + 0.15);
-    
-    gain.gain.setValueAtTime(0.2, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-    
-    osc.start();
-    osc.stop(ctx.currentTime + 0.16);
-  } catch (e) {}
+    const audio = getAudio('error');
+    if (audio) {
+      audio.currentTime = 0;
+      audio.play().catch(() => {
+        // Ignore autoplay blocks
+      });
+    }
+  } catch (e) {
+    // Ignore audio play errors
+  }
 }
