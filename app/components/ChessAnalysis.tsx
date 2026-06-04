@@ -11,6 +11,7 @@ import { MoveList } from './MoveList';
 import { GameGraph } from './GameGraph';
 import { DbExplorer } from './DbExplorer';
 import { GameLibrary } from './GameLibrary';
+import { PuzzleArena } from './PuzzleArena';
 
 type Arrow = { startSquare: string; endSquare: string; color: string };
 
@@ -49,7 +50,8 @@ export function ChessAnalysis() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [cursor, setCursor] = useState(-1);
   const [initialFen, setInitialFen] = useState(STARTING_FEN);
-  const [activeGame, setActiveGame] = useState<GameMeta | null>(null);
+  const [activeGame, setActiveGame] = useState<(GameMeta & { id?: number }) | null>(null);
+  const [mode, setMode] = useState<'analysis' | 'puzzles'>('analysis');
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
   const [pgnInput, setPgnInput] = useState('');
   const [pgnError, setPgnError] = useState('');
@@ -83,6 +85,16 @@ export function ChessAnalysis() {
     return () => window.removeEventListener('keydown', onKey);
   }, [history.length]);
 
+  useEffect(() => {
+    if (!analyzing && activeGame?.id && history.length > 0) {
+      fetch('/api/puzzles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: activeGame.id }),
+      }).catch(console.error);
+    }
+  }, [analyzing, activeGame?.id, history.length]);
+
   // Interactive piece drop
   const onPieceDrop = useCallback(
     ({ sourceSquare, targetSquare, piece }: any) => {
@@ -104,15 +116,15 @@ export function ChessAnalysis() {
     setTimeout(() => analyzeLastMove(next, initialFen), 0);
   }, [currentFen, cursor, history, analyzeLastMove, initialFen]);
 
-  const loadRawPgn = useCallback((pgn: string) => {
+  const loadRawPgn = useCallback((pgn: string, id?: number) => {
     const { sf, entries } = parsePgn(pgn);
     setInitialFen(sf);
     setHistory(entries);
     setCursor(-1);
     resetAnalysis();
     analyzeGame(entries, sf);
-    saveGamePgn(pgn);
-    setupGameMeta(pgn, setOrientation, setActiveGame);
+    saveGamePgn(pgn, setActiveGame);
+    setupGameMeta(pgn, setOrientation, setActiveGame, id);
   }, [analyzeGame, resetAnalysis]);
 
   // PGN load
@@ -217,6 +229,10 @@ export function ChessAnalysis() {
               </button>
             ) : null
           )}
+          <button onClick={() => setMode('puzzles')}
+            className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
+            🧩 Puzzles
+          </button>
           <button onClick={() => setShowLibrary(true)}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
             📚 Library
@@ -229,7 +245,7 @@ export function ChessAnalysis() {
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Flip ⇅
           </button>
-          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); }}
+          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); setMode('analysis'); }}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Reset
           </button>
@@ -252,7 +268,10 @@ export function ChessAnalysis() {
       )}
 
       {/* Main area */}
-      <div className="flex flex-1 overflow-hidden">
+      {mode === 'puzzles' ? (
+        <PuzzleArena onExit={() => setMode('analysis')} />
+      ) : (
+        <div className="flex flex-1 overflow-hidden">
         {/* Eval bar */}
         <div className="flex items-stretch px-2 py-2 shrink-0">
           <EvalBar evaluation={evaluation} orientation={orientation} />
@@ -379,6 +398,7 @@ export function ChessAnalysis() {
           </div>
         </div>
       </div>
+      )}
       <GameLibrary isOpen={showLibrary} onClose={() => setShowLibrary(false)} onSelectGame={loadRawPgn} />
     </div>
   );
@@ -473,12 +493,11 @@ function parsePgn(pgn: string) {
   return { sf, entries };
 }
 
-function saveGamePgn(pgn: string) {
-  fetch('/api/games', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pgn }),
-  }).catch(console.error);
+function saveGamePgn(pgn: string, setActiveGame: any) {
+  fetch('/api/games', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pgn }) })
+    .then((r) => r.json())
+    .then((d) => d.id && setActiveGame((g: any) => g ? { ...g, id: d.id } : null))
+    .catch(console.error);
 }
 
 function parseGameMeta(pgn: string): GameMeta {
@@ -489,9 +508,9 @@ function parseGameMeta(pgn: string): GameMeta {
   return { white, black, result: h.Result || '*', date: h.Date || 'Unknown' };
 }
 
-function setupGameMeta(pgn: string, setOrientation: any, setActiveGame: any) {
+function setupGameMeta(pgn: string, setOrientation: any, setActiveGame: any, id?: number) {
   setOrientation(getPlayerOrientation(pgn));
-  setActiveGame(parseGameMeta(pgn));
+  setActiveGame({ ...parseGameMeta(pgn), id });
 }
 
 function getPlayerOrientation(pgn: string): 'white' | 'black' {

@@ -104,13 +104,21 @@ async function indexGameMoves(pgn: string, result: string, userColor: string) {
   }
 }
 
+async function fetchGameIdByHash(hash: string): Promise<number | null> {
+  const sql = 'SELECT id FROM games WHERE pgn_hash = ? LIMIT 1';
+  const rs = await turso.execute({ sql, args: [hash] });
+  return (rs.rows[0]?.id as number) || null;
+}
+
 async function handleImport(pgn: string) {
   const hash = computePgnHash(pgn);
-  if (await checkGameExists(hash)) return { success: true, duplicate: true };
+  const existingId = await fetchGameIdByHash(hash);
+  if (existingId) return { success: true, duplicate: true, id: existingId };
   const d = parseGameDetails(pgn);
   await insertGame(pgn, hash, d);
   await indexGameMoves(pgn, d.result, d.userColor);
-  return { success: true, duplicate: false };
+  const newId = await fetchGameIdByHash(hash);
+  return { success: true, duplicate: false, id: newId };
 }
 
 export async function POST(req: NextRequest) {

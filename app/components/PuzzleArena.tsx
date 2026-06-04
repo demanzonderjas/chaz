@@ -1,0 +1,270 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { Chess } from 'chess.js';
+import { Chessboard, ChessboardProvider } from 'react-chessboard';
+
+const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+function getSquareCoords(square: string, orientation: 'white' | 'black') {
+  const colIndex = square.charCodeAt(0) - 97;
+  const rowIndex = parseInt(square[1]) - 1;
+  const x = orientation === 'white' ? (colIndex + 0.5) * 12.5 : (7 - colIndex + 0.5) * 12.5;
+  const y = orientation === 'white' ? (7 - rowIndex + 0.5) * 12.5 : (rowIndex + 0.5) * 12.5;
+  return { x, y };
+}
+
+function getArrowPathData(fromSq: string, toSq: string, orientation: 'white' | 'black') {
+  const f = getSquareCoords(fromSq, orientation), t = getSquareCoords(toSq, orientation);
+  const dx = t.x - f.x, dy = t.y - f.y, isK = Math.abs(Math.round(dx / 12.5) * Math.round(dy / 12.5)) === 2;
+  const c = isK ? (Math.abs(dx) < Math.abs(dy) ? { x: f.x, y: t.y } : { x: t.x, y: f.y }) : null;
+  const sx = c ? c.x : f.x, sy = c ? c.y : f.y, theta = Math.atan2(t.y - sy, t.x - sx);
+  const bx = t.x - 5.0 * Math.cos(theta), by = t.y - 5.0 * Math.sin(theta);
+  const pathD = c ? `M ${f.x} ${f.y} L ${c.x} ${c.y} L ${bx} ${by}` : `M ${f.x} ${f.y} L ${bx} ${by}`;
+  return { pathD, theta, bx, by, tx: t.x, ty: t.y };
+}
+
+function getArrowheadPoints(bx: number, by: number, tx: number, ty: number, theta: number) {
+  const w = 5.0;
+  const lx = bx + (w / 2) * Math.cos(theta + Math.PI / 2);
+  const ly = by + (w / 2) * Math.sin(theta + Math.PI / 2);
+  const rx = bx + (w / 2) * Math.cos(theta - Math.PI / 2);
+  const ry = by + (w / 2) * Math.sin(theta - Math.PI / 2);
+  return `${tx},${ty} ${lx},${ly} ${rx},${ry}`;
+}
+
+const BlunderArrow = ({ from, to, orientation }: { from: string; to: string; orientation: 'white' | 'black' }) => {
+  const d = getArrowPathData(from, to, orientation), p = getArrowheadPoints(d.bx, d.by, d.tx, d.ty, d.theta);
+  return (
+    <svg viewBox="0 0 100 100" className="absolute inset-0 pointer-events-none z-20" style={{ opacity: 0.65 }}>
+      <path d={d.pathD} fill="none" stroke="#dc2626" strokeWidth="2.5" strokeLinecap="round" />
+      <polygon points={p} fill="#dc2626" />
+    </svg>
+  );
+};
+
+interface Puzzle {
+  id: number;
+  game_id: number;
+  start_fen: string;
+  solution_uci: string;
+  solution_san: string;
+  player_color: string;
+  description: string;
+  blunder_uci: string;
+  blunder_san: string;
+  game_title: string;
+}
+
+function getEvalLabel(ev: any): string {
+  if (!ev) return '';
+  if (ev.mate !== undefined && ev.mate !== null) {
+    return `M${Math.abs(ev.mate)}`;
+  }
+  if (ev.cp !== undefined && ev.cp !== null) {
+    const val = ev.cp / 100;
+    return (val >= 0 ? '+' : '') + val.toFixed(2);
+  }
+  return '';
+}
+
+function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
+  if (uci === puzzle.solution_uci) return true;
+  if (!ev || !ev.lines) return false;
+  const best = ev.lines[0], cand = ev.lines.find((l: any) => l.pv && l.pv[0] === uci);
+  if (!best || !cand) return false;
+  if (best.mate !== null && best.mate !== undefined) {
+    return cand.mate !== null && cand.mate !== undefined;
+  }
+  return (best.score ?? 0) - (cand.score ?? 0) <= 50;
+}
+
+async function fetchNextPuzzle(setPuzzle: any, setEval: any, setBook: any, setBoard: any, setStatus: any) {
+  setStatus('loading');
+  const res = await fetch('/api/puzzles');
+  if (!res.ok) return;
+  const data = await res.json();
+  setPuzzle(data.puzzle);
+  setEval(data.evaluation);
+  setBook(data.bookLine || null);
+  setBoard(data.puzzle.start_fen);
+  setStatus('playing');
+}
+
+function getSan(fen: string, uci: string): string {
+  try {
+    const chess = new Chess(fen);
+    const m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    return m ? m.san : uci;
+  } catch {
+    return uci;
+  }
+}
+
+const CandidateItem = ({ line, startFen, idx }: any) => {
+  const score = line.mate !== null ? `M${Math.abs(line.mate)}` : `${(line.score / 100).toFixed(2)}`;
+  return (
+    <div className="flex justify-between text-zinc-300 font-mono text-xs">
+      <span>{idx + 1}. {getSan(startFen, line.pv[0])}</span>
+      <span className="text-zinc-400">{score}</span>
+    </div>
+  );
+};
+
+const CandidateMovesList = ({ evaluation, startFen }: { evaluation: any; startFen: string }) => {
+  if (!evaluation?.lines) return null;
+  return (
+    <div className="mt-4 p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+      <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Candidate Moves</div>
+      <div className="space-y-1">{evaluation.lines.slice(0, 4).map((l: any, i: number) => <CandidateItem key={i} line={l} startFen={startFen} idx={i} />)}</div>
+    </div>
+  );
+};
+
+function getPromoPiece(pieceType: string, targetSquare: string): string | undefined {
+  const isPawn = pieceType.toLowerCase().endsWith('p');
+  const isPromoRank = targetSquare[1] === '8' || targetSquare[1] === '1';
+  return isPawn && isPromoRank ? 'q' : undefined;
+}
+
+const StatusCard = ({ status, solution }: { status: string; solution: string }) => {
+  if (status === 'correct') return <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">✨ CORRECT! You found the best move.</div>;
+  if (status === 'incorrect') return <div className="p-3 bg-rose-950/60 border border-rose-800 text-rose-400 rounded text-sm font-semibold text-center shadow-lg">❌ INCORRECT! That is a mistake, try again.</div>;
+  if (status === 'solved') return <div className="p-3 bg-blue-950/60 border border-blue-800 text-blue-400 rounded text-sm font-semibold text-center shadow-lg">💡 Solution: {solution}</div>;
+  return <div className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded text-sm text-center">Make your move on the board...</div>;
+};
+
+const PuzzlePrompt = ({ desc, title, evaluation, bookLine }: { desc: string; title: string; evaluation: any; bookLine: string | null }) => (
+  <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4">
+    <div className="flex justify-between items-start mb-1.5">
+      <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Challenge</span>
+      {evaluation && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-zinc-800 text-zinc-300 border border-zinc-700">
+          Eval: {getEvalLabel(evaluation)}
+        </span>
+      )}
+    </div>
+    <div className="text-sm font-bold text-zinc-100 mb-3 leading-relaxed">{desc}</div>
+    {bookLine && (
+      <div className="mb-3">
+        <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1">Opening Book Line</div>
+        <div className="text-xs text-blue-300 font-semibold truncate flex items-center gap-1">📖 {bookLine}</div>
+      </div>
+    )}
+    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1">Source Game</div>
+    <div className="text-xs text-zinc-300 font-medium truncate">{title}</div>
+  </div>
+);
+
+const PuzzleControls = ({ status, onNext, onReveal, onExit }: any) => (
+  <div className="flex flex-col gap-2 mt-4">
+    <button onClick={onNext} className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-semibold transition-all cursor-pointer shadow-md shadow-emerald-950/20">Next Puzzle</button>
+    <button onClick={onReveal} disabled={status === 'solved' || status === 'correct'} className="w-full py-2 bg-zinc-850 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-300 rounded text-sm font-semibold transition-all border border-zinc-700 cursor-pointer">Show Solution</button>
+    <button onClick={onExit} className="w-full py-2 bg-zinc-950 hover:bg-zinc-900 text-zinc-400 rounded text-sm font-semibold transition-all border border-zinc-850 cursor-pointer mt-4">Back to Analysis</button>
+  </div>
+);
+
+function checkUciMove(uci: string, puzzle: any) {
+  return uci === puzzle.solution_uci;
+}
+
+function applyCorrectMove(src: string, dst: string, promo: string | undefined, boardFen: string, setBoardFen: any, setStatus: any) {
+  const chess = new Chess(boardFen);
+  chess.move({ from: src, to: dst, promotion: promo });
+  setBoardFen(chess.fen());
+  setStatus('correct');
+}
+
+function handleWrongMove(puzzle: any, setBoardFen: any, setStatus: any) {
+  setStatus('incorrect');
+  setTimeout(() => {
+    setBoardFen(puzzle.start_fen);
+    setStatus('playing');
+  }, 1000);
+}
+
+const BlunderBadge = () => (
+  <div className="absolute top-[3px] right-[3px] z-20 flex pointer-events-none">
+    <span className="flex items-center justify-center rounded-full border-[2.5px] border-white shadow-[0_2px_4px_rgba(0,0,0,0.4)] font-bold leading-none w-8 h-8 text-sm bg-[#dc2626] text-white">??</span>
+  </div>
+);
+
+export function PuzzleArena({ onExit }: { onExit: () => void }) {
+  const [puzzle, setPuzzle] = useState<any>(null);
+  const [evaluation, setEvaluation] = useState<any>(null);
+  const [bookLine, setBookLine] = useState<string | null>(null);
+  const [boardFen, setBoardFen] = useState(STARTING_FEN);
+  const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved'>('loading');
+
+  const loadNext = useCallback(() => fetchNextPuzzle(setPuzzle, setEvaluation, setBookLine, setBoardFen, setStatus), []);
+  useEffect(() => { loadNext(); }, [loadNext]);
+
+  const onReveal = useCallback(() => {
+    if (!puzzle) return;
+    const chess = new Chess(boardFen);
+    chess.move({ from: puzzle.solution_uci.slice(0, 2), to: puzzle.solution_uci.slice(2, 4), promotion: puzzle.solution_uci[4] });
+    setBoardFen(chess.fen());
+    setStatus('solved');
+  }, [puzzle, boardFen]);
+
+  const onPieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: any) => {
+    if (!puzzle || status !== 'playing') return false;
+    const promo = getPromoPiece(piece.pieceType, targetSquare);
+    const uci = sourceSquare + targetSquare + (promo || '');
+    const ok = isAcceptableMove(uci, puzzle, evaluation);
+    if (ok) applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
+    else handleWrongMove(puzzle, setBoardFen, setStatus);
+    return ok;
+  }, [puzzle, boardFen, status, evaluation]);
+
+  const squareRenderer = useCallback(
+    ({ square, children }: any) => {
+      const dest = puzzle?.blunder_uci?.slice(2, 4);
+      return (
+        <div className="relative w-full h-full">
+          {children}
+          {square === dest && <BlunderBadge />}
+        </div>
+      );
+    },
+    [puzzle]
+  );
+
+  if (status === 'loading') return <div className="flex-1 flex items-center justify-center bg-zinc-950 text-zinc-400 text-sm">Loading next puzzle...</div>;
+  if (!puzzle) return <div className="flex-1 flex items-center justify-center bg-zinc-950 text-zinc-400 text-sm">No puzzles available. Try scanning your library!</div>;
+
+  return (
+    <div className="flex flex-1 overflow-hidden">
+      <div className="flex-1 flex items-center justify-center p-6 bg-zinc-950 relative">
+        <div className="relative aspect-square shadow-2xl rounded-lg overflow-hidden border border-zinc-800/40" style={{ width: 'min(calc(100vh - 120px), calc(100vw - 440px))' }}>
+          <ChessboardProvider
+            options={{
+              position: boardFen,
+              boardOrientation: puzzle.player_color === 'w' ? 'white' : 'black',
+              onPieceDrop,
+              squareRenderer,
+            }}
+          >
+            <Chessboard />
+          </ChessboardProvider>
+          {puzzle.blunder_uci && (
+            <BlunderArrow
+              from={puzzle.blunder_uci.slice(0, 2)}
+              to={puzzle.blunder_uci.slice(2, 4)}
+              orientation={puzzle.player_color === 'w' ? 'white' : 'black'}
+            />
+          )}
+        </div>
+      </div>
+      <div className="w-[380px] border-l border-zinc-900 bg-zinc-950/80 backdrop-blur-md p-6 flex flex-col justify-between shrink-0 overflow-y-auto">
+        <div>
+          <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2 mb-6">🧩 Personal Puzzles</h2>
+          <PuzzlePrompt desc={puzzle.description} title={puzzle.game_title} evaluation={evaluation} bookLine={bookLine} />
+          <StatusCard status={status} solution={puzzle.solution_san} />
+          {(status === 'correct' || status === 'solved') && <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />}
+        </div>
+        <PuzzleControls status={status} onNext={loadNext} onReveal={onReveal} onExit={onExit} />
+      </div>
+    </div>
+  );
+}

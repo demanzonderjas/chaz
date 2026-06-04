@@ -5,14 +5,14 @@ import React, { useEffect, useState, useCallback } from 'react';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onSelectGame: (pgn: string) => void;
+  onSelectGame: (pgn: string, id?: number) => void;
 }
 
-async function handleGameClick(id: number, onSelect: (pgn: string) => void, onClose: () => void) {
+async function handleGameClick(id: number, onSelect: (pgn: string, id?: number) => void, onClose: () => void) {
   const res = await fetch(`/api/games?id=${id}`);
   if (res.ok) {
     const data = await res.json();
-    onSelect(data.pgn);
+    onSelect(data.pgn, id);
     onClose();
   }
 }
