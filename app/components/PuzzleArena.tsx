@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard, ChessboardProvider } from 'react-chessboard';
+import { playMoveSound, playErrorSound } from '../services/sound';
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -80,20 +81,7 @@ function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
   return diff <= 50;
 }
 
-async function fetchNextPuzzle(type: 'tactical' | 'book', setPuzzle: any, setEval: any, setBook: any, setBoard: any, setStatus: any) {
-  setStatus('loading');
-  const res = await fetch(`/api/puzzles?type=${type}`);
-  if (!res.ok) {
-    setStatus('error');
-    return;
-  }
-  const data = await res.json();
-  setPuzzle(data.puzzle);
-  setEval(data.evaluation);
-  setBook(data.bookLine || null);
-  setBoard(data.puzzle.start_fen);
-  setStatus('playing');
-}
+
 
 function getSan(fen: string, uci: string): string {
   try {
@@ -127,6 +115,72 @@ const CandidateMovesList = ({ evaluation, startFen }: { evaluation: any; startFe
   );
 };
 
+const BookLinesList = ({ 
+  bookLines, 
+  boardFen, 
+  setBoardFen, 
+  startFen,
+  activeLineIdx,
+  setActiveLineIdx,
+  activeMoveIdx,
+  setActiveMoveIdx
+}: { 
+  bookLines: any[]; 
+  boardFen: string; 
+  setBoardFen: (fen: string) => void; 
+  startFen: string;
+  activeLineIdx: number;
+  setActiveLineIdx: (idx: number) => void;
+  activeMoveIdx: number;
+  setActiveMoveIdx: (idx: number) => void;
+}) => {
+  if (!bookLines || bookLines.length === 0) return null;
+  return (
+    <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-3">
+      <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Book Lines Explorer</div>
+      {bookLines.map((line, lineIdx) => {
+        const isLineActive = activeLineIdx === lineIdx;
+        return (
+          <div key={lineIdx} className="space-y-1.5 border-b border-zinc-850/60 last:border-0 pb-2.5 last:pb-0">
+            <div className={`text-[10px] font-semibold truncate transition-colors ${isLineActive ? 'text-blue-300 font-bold' : 'text-zinc-500 font-medium'}`} title={line.name}>
+              📖 {line.name} {isLineActive && <span className="text-[9px] px-1 py-0.2 rounded bg-blue-950/80 border border-blue-900 text-blue-400 font-bold ml-1 uppercase tracking-wider">Active</span>}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              <button 
+                onClick={() => {
+                  playMoveSound(false);
+                  setActiveLineIdx(lineIdx);
+                  setActiveMoveIdx(-1);
+                  setBoardFen(startFen);
+                }}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isLineActive && activeMoveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-355'}`}
+              >
+                Start
+              </button>
+              {line.moves.map((move: any, moveIdx: number) => {
+                const isCurrentMove = isLineActive && activeMoveIdx === moveIdx;
+                return (
+                  <button
+                    key={moveIdx}
+                    onClick={() => {
+                      playMoveSound(move.san.includes('x'));
+                      setActiveLineIdx(lineIdx);
+                      setActiveMoveIdx(moveIdx);
+                      setBoardFen(move.fen_after);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    {move.san}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 function getPromoPiece(pieceType: string, targetSquare: string): string | undefined {
   const isPawn = pieceType.toLowerCase().endsWith('p');
@@ -147,7 +201,19 @@ const StatusCard = ({ status, solution, isBook }: { status: string; solution: st
   return <div className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded text-sm text-center">Make your move on the board...</div>;
 };
 
-const PuzzlePrompt = ({ desc, title, evaluation, bookLine }: { desc: string; title: string; evaluation: any; bookLine: string | null }) => (
+const PuzzlePrompt = ({ 
+  desc, 
+  title, 
+  evaluation, 
+  bookLine, 
+  onLoadGame 
+}: { 
+  desc: string; 
+  title: string; 
+  evaluation: any; 
+  bookLine: string | null;
+  onLoadGame?: () => void;
+}) => (
   <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4">
     <div className="flex justify-between items-start mb-1.5">
       <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Challenge</span>
@@ -165,7 +231,17 @@ const PuzzlePrompt = ({ desc, title, evaluation, bookLine }: { desc: string; tit
       </div>
     )}
     <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1">Source Game</div>
-    <div className="text-xs text-zinc-300 font-medium truncate">{title}</div>
+    {onLoadGame ? (
+      <button 
+        onClick={onLoadGame} 
+        className="text-xs text-blue-400 hover:text-blue-300 hover:underline font-semibold truncate flex items-center gap-1 cursor-pointer w-full text-left"
+        title="Load this game and analyze from this position"
+      >
+        🔗 {title}
+      </button>
+    ) : (
+      <div className="text-xs text-zinc-300 font-medium truncate">{title}</div>
+    )}
   </div>
 );
 
@@ -202,7 +278,7 @@ const BlunderBadge = () => (
   </div>
 );
 
-export function PuzzleArena({ onExit }: { onExit: () => void }) {
+export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoadGame?: (pgn: string, startFen: string, gameId: number) => void }) {
   const [puzzleType, setPuzzleType] = useState<'tactical' | 'book'>('tactical');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
@@ -210,13 +286,77 @@ export function PuzzleArena({ onExit }: { onExit: () => void }) {
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
   const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
 
+  const [fetchKey, setFetchKey] = useState(0);
+
   const loadNext = useCallback(() => {
-    fetchNextPuzzle(puzzleType, setPuzzle, setEvaluation, setBookLine, setBoardFen, setStatus);
-  }, [puzzleType]);
+    setFetchKey(k => k + 1);
+  }, []);
 
   useEffect(() => {
-    loadNext();
-  }, [loadNext]);
+    let active = true;
+    setStatus('loading');
+    
+    fetch(`/api/puzzles?type=${puzzleType}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to fetch puzzle');
+        return res.json();
+      })
+      .then(data => {
+        if (!active) return;
+        setPuzzle(data.puzzle);
+        setEvaluation(data.evaluation);
+        setBookLine(data.bookLine || null);
+        setBoardFen(data.puzzle.start_fen);
+        setStatus('playing');
+        setActiveLineIdx(0);
+        setActiveMoveIdx(-1);
+      })
+      .catch(() => {
+        if (active) setStatus('error');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [puzzleType, fetchKey]);
+
+  const [activeLineIdx, setActiveLineIdx] = useState<number>(0);
+  const [activeMoveIdx, setActiveMoveIdx] = useState<number>(-1);
+
+  useEffect(() => {
+    if (status !== 'correct' && status !== 'solved') return;
+    if (puzzleType !== 'book' || !puzzle?.book_lines || puzzle.book_lines.length === 0) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      
+      const activeLine = puzzle.book_lines[activeLineIdx];
+      if (!activeLine) return;
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (activeMoveIdx > -1) {
+          const nextIdx = activeMoveIdx - 1;
+          setActiveMoveIdx(nextIdx);
+          const nextFen = nextIdx === -1 ? puzzle.start_fen : activeLine.moves[nextIdx].fen_after;
+          playMoveSound(false);
+          setBoardFen(nextFen);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (activeMoveIdx < activeLine.moves.length - 1) {
+          const nextIdx = activeMoveIdx + 1;
+          setActiveMoveIdx(nextIdx);
+          const nextMove = activeLine.moves[nextIdx];
+          playMoveSound(nextMove.san.includes('x'));
+          setBoardFen(nextMove.fen_after);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [status, puzzleType, puzzle, activeLineIdx, activeMoveIdx, setBoardFen]);
 
   const handleTypeChange = (type: 'tactical' | 'book') => {
     setPuzzleType(type);
@@ -224,12 +364,18 @@ export function PuzzleArena({ onExit }: { onExit: () => void }) {
     setEvaluation(null);
     setBookLine(null);
     setBoardFen(STARTING_FEN);
+    setActiveLineIdx(0);
+    setActiveMoveIdx(-1);
   };
 
   const onReveal = useCallback(() => {
     if (!puzzle) return;
     const chess = new Chess(boardFen);
-    chess.move({ from: puzzle.solution_uci.slice(0, 2), to: puzzle.solution_uci.slice(2, 4), promotion: puzzle.solution_uci[4] });
+    try {
+      const m = chess.move({ from: puzzle.solution_uci.slice(0, 2), to: puzzle.solution_uci.slice(2, 4), promotion: puzzle.solution_uci[4] });
+      const isCapture = m ? m.san.includes('x') : false;
+      playMoveSound(isCapture);
+    } catch {}
     setBoardFen(chess.fen());
     setStatus('solved');
   }, [puzzle, boardFen]);
@@ -239,8 +385,18 @@ export function PuzzleArena({ onExit }: { onExit: () => void }) {
     const promo = getPromoPiece(piece.pieceType, targetSquare);
     const uci = sourceSquare + targetSquare + (promo || '');
     const ok = isAcceptableMove(uci, puzzle, evaluation);
-    if (ok) applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
-    else handleWrongMove(puzzle, setBoardFen, setStatus);
+    if (ok) {
+      const chess = new Chess(boardFen);
+      try {
+        const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
+        const isCapture = m ? m.san.includes('x') : false;
+        playMoveSound(isCapture);
+      } catch {}
+      applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
+    } else {
+      playErrorSound();
+      handleWrongMove(puzzle, setBoardFen, setStatus);
+    }
     return ok;
   }, [puzzle, boardFen, status, evaluation]);
 
@@ -312,10 +468,29 @@ export function PuzzleArena({ onExit }: { onExit: () => void }) {
 
           {puzzle && (
             <>
-              <PuzzlePrompt desc={puzzle.description} title={puzzle.game_title} evaluation={evaluation} bookLine={bookLine} />
+              <PuzzlePrompt 
+                desc={puzzle.description} 
+                title={puzzle.game_title} 
+                evaluation={evaluation} 
+                bookLine={bookLine} 
+                onLoadGame={onLoadGame && puzzle.game_pgn ? () => onLoadGame(puzzle.game_pgn, puzzle.start_fen, puzzle.game_id) : undefined}
+              />
               <StatusCard status={status} solution={puzzle.solution_san} isBook={puzzleType === 'book'} />
-              {(status === 'correct' || status === 'solved') && puzzleType === 'tactical' && (
-                <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />
+              {(status === 'correct' || status === 'solved') && (
+                puzzleType === 'book' ? (
+                  <BookLinesList 
+                    bookLines={puzzle.book_lines} 
+                    boardFen={boardFen} 
+                    setBoardFen={setBoardFen} 
+                    startFen={puzzle.start_fen} 
+                    activeLineIdx={activeLineIdx}
+                    setActiveLineIdx={setActiveLineIdx}
+                    activeMoveIdx={activeMoveIdx}
+                    setActiveMoveIdx={setActiveMoveIdx}
+                  />
+                ) : (
+                  <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />
+                )
               )}
             </>
           )}

@@ -92,6 +92,47 @@ async function loadPuzzleDetails(puzzle: any) {
   return { evaluation, bookLine };
 }
 
+async function fetchBookLinesForFen(fenBefore: string, posPly: number) {
+  const bookFen = normalizeBookFen(fenBefore);
+  // 1. Get the line IDs that pass through this FEN
+  const lineIdsRs = await turso.execute({
+    sql: 'SELECT DISTINCT line_id FROM book_moves WHERE fen_before = ?',
+    args: [bookFen]
+  });
+  
+  if (lineIdsRs.rows.length === 0) return [];
+  
+  const lineIds = lineIdsRs.rows.map(r => Number(r.line_id));
+  const linesData: { name: string; moves: { san: string; uci: string; fen_after: string; ply: number }[] }[] = [];
+  
+  for (const lineId of lineIds.slice(0, 3)) {
+    const nameRs = await turso.execute({
+      sql: 'SELECT name FROM book_lines WHERE id = ?',
+      args: [lineId]
+    });
+    const lineName = nameRs.rows[0] ? String(nameRs.rows[0].name) : `Line #${lineId}`;
+    
+    const movesRs = await turso.execute({
+      sql: 'SELECT ply, san, uci, fen_after FROM book_moves WHERE line_id = ? AND ply >= ? ORDER BY ply ASC LIMIT 10',
+      args: [lineId, posPly]
+    });
+    
+    const moves = movesRs.rows.map(r => ({
+      ply: Number(r.ply),
+      san: String(r.san),
+      uci: String(r.uci),
+      fen_after: String(r.fen_after),
+    }));
+    
+    linesData.push({
+      name: lineName,
+      moves,
+    });
+  }
+  
+  return linesData;
+}
+
 async function fetchBookPuzzle() {
   const gamesSql = 'SELECT id, pgn, white_name, black_name, result, user_color, played_date FROM games ORDER BY RANDOM() LIMIT 5';
   const gamesRs = await turso.execute(gamesSql);
@@ -114,13 +155,15 @@ async function fetchBookPuzzle() {
     const temp = new Chess(startFen);
     const positions: { fen: string; bookFen: string; playedMove: { uci: string; san: string } }[] = [];
     
-    for (const m of history) {
+    for (let idx = 0; idx < history.length; idx++) {
+      const m = history[idx];
       const fenBefore = temp.fen();
       const turn = temp.turn();
       const uci = m.from + m.to + (m.promotion || '');
       const san = m.san;
       
-      if (turn === uColor) {
+      // Skip the first three ply
+      if (idx >= 3 && turn === uColor) {
         positions.push({
           fen: fenBefore,
           bookFen: normalizeBookFen(fenBefore),
@@ -134,7 +177,7 @@ async function fetchBookPuzzle() {
 
     const placeholders = positions.map(() => '?').join(',');
     const bookMovesSql = `
-      SELECT fen_before, uci, san, is_mainline
+      SELECT fen_before, uci, san, is_mainline, ply
       FROM book_moves
       WHERE fen_before IN (${placeholders})
     `;
@@ -186,6 +229,8 @@ async function fetchBookPuzzle() {
       ? `You played ${selected.playedSan} in the game. Find the correct book move instead!`
       : `Find the correct book move in this position from your game!`;
 
+    const bookLines = await fetchBookLinesForFen(selected.fen, Number(bmMain.ply));
+
     const puzzle = {
       id: -Number(game.id) * 1000 - Math.floor(Math.random() * 1000),
       type: 'book',
@@ -200,6 +245,8 @@ async function fetchBookPuzzle() {
       game_title: gameTitle,
       valid_moves: selected.bookMoves.map(bm => String(bm.uci)),
       valid_moves_san: selected.bookMoves.map(bm => String(bm.san)),
+      game_pgn: pgn,
+      book_lines: bookLines,
     };
 
     const evalPromise = fetchEvaluationForFen(selected.fen);
@@ -228,7 +275,9 @@ export async function GET(req: NextRequest) {
     const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle();
     if (!puzzle) return NextResponse.json({ error: 'No puzzles found' }, { status: 404 });
     const details = await loadPuzzleDetails(puzzle);
-    return NextResponse.json({ puzzle, ...details });
+    const gameResult = await fetchGameForScan(Number(puzzle.game_id));
+    const game_pgn = gameResult ? String(gameResult.pgn) : null;
+    return NextResponse.json({ puzzle: { ...puzzle, game_pgn }, ...details });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

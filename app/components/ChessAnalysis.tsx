@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard, ChessboardProvider } from 'react-chessboard';
 import { useStockfish } from '../hooks/useStockfish';
@@ -12,6 +12,7 @@ import { GameGraph } from './GameGraph';
 import { DbExplorer } from './DbExplorer';
 import { GameLibrary } from './GameLibrary';
 import { PuzzleArena } from './PuzzleArena';
+import { playMoveSound } from '../services/sound';
 
 type Arrow = { startSquare: string; endSquare: string; color: string };
 
@@ -85,6 +86,31 @@ export function ChessAnalysis() {
     return () => window.removeEventListener('keydown', onKey);
   }, [history.length]);
 
+  const prevCursorRef = useRef(cursor);
+  const prevHistoryRef = useRef(history);
+
+  useEffect(() => {
+    if (prevHistoryRef.current !== history) {
+      prevHistoryRef.current = history;
+      prevCursorRef.current = cursor;
+      return;
+    }
+
+    if (prevCursorRef.current !== cursor) {
+      const direction = cursor - prevCursorRef.current;
+      prevCursorRef.current = cursor;
+
+      if (history.length > 0 && cursor >= -1) {
+        if (direction > 0 && cursor >= 0 && history[cursor]) {
+          const isCapture = history[cursor].san.includes('x');
+          playMoveSound(isCapture);
+        } else if (direction < 0) {
+          playMoveSound(false);
+        }
+      }
+    }
+  }, [cursor, history]);
+
   useEffect(() => {
     if (!analyzing && activeGame?.id && history.length > 0) {
       fetch('/api/puzzles', {
@@ -125,6 +151,28 @@ export function ChessAnalysis() {
     analyzeGame(entries, sf);
     saveGamePgn(pgn, setActiveGame);
     setupGameMeta(pgn, setOrientation, setActiveGame, id);
+  }, [analyzeGame, resetAnalysis]);
+
+  const loadGameFromPuzzle = useCallback((pgn: string, startFen: string, id?: number) => {
+    const { sf, entries } = parsePgn(pgn);
+    setInitialFen(sf);
+    setHistory(entries);
+    resetAnalysis();
+    analyzeGame(entries, sf);
+    setupGameMeta(pgn, setOrientation, setActiveGame, id);
+    
+    const target = normalizeBookFen(startFen);
+    let targetCursor = -1;
+    if (normalizeBookFen(sf) === target) {
+      targetCursor = -1;
+    } else {
+      const idx = entries.findIndex(e => normalizeBookFen(e.fen) === target);
+      if (idx !== -1) {
+        targetCursor = idx;
+      }
+    }
+    setCursor(targetCursor);
+    setMode('analysis');
   }, [analyzeGame, resetAnalysis]);
 
   // PGN load
@@ -269,7 +317,7 @@ export function ChessAnalysis() {
 
       {/* Main area */}
       {mode === 'puzzles' ? (
-        <PuzzleArena onExit={() => setMode('analysis')} />
+        <PuzzleArena onExit={() => setMode('analysis')} onLoadGame={loadGameFromPuzzle} />
       ) : (
         <div className="flex flex-1 overflow-hidden">
         {/* Eval bar */}
@@ -603,3 +651,8 @@ const SquareAnnotations = ({ types }: { types: string[] }) => (
     {types.map((t) => <AnnotationBadge key={t} type={t} />)}
   </div>
 );
+
+function normalizeBookFen(fen: string): string {
+  const p = fen.split(' ');
+  return `${p[0]} ${p[1]} ${p[2]} -`;
+}
