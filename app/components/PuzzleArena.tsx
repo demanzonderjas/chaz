@@ -188,17 +188,59 @@ function getPromoPiece(pieceType: string, targetSquare: string): string | undefi
   return isPawn && isPromoRank ? 'q' : undefined;
 }
 
-const StatusCard = ({ status, solution, isBook }: { status: string; solution: string; isBook: boolean }) => {
+const StatusCard = ({ 
+  status, 
+  solution, 
+  puzzleType, 
+  hint 
+}: { 
+  status: string; 
+  solution: string; 
+  puzzleType: string; 
+  hint: string | null;
+}) => {
   if (status === 'correct') {
     return (
       <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">
-        {isBook ? '✨ CORRECT! You found the book move.' : '✨ CORRECT! You found the best move.'}
+        {puzzleType === 'book' ? '✨ CORRECT! You found the book move.' : '✨ CORRECT! You found the best move.'}
       </div>
     );
   }
-  if (status === 'incorrect') return <div className="p-3 bg-rose-950/60 border border-rose-800 text-rose-400 rounded text-sm font-semibold text-center shadow-lg">❌ INCORRECT! That is a mistake, try again.</div>;
+  if (status === 'incorrect') {
+    return (
+      <div className="p-3 bg-rose-950/60 border border-rose-800 text-rose-400 rounded text-sm font-semibold text-center shadow-lg flex flex-col gap-1">
+        <span>❌ INCORRECT! That is a mistake.</span>
+        {hint && <span className="text-xs text-rose-300 font-light mt-0.5">{hint}</span>}
+      </div>
+    );
+  }
   if (status === 'solved') return <div className="p-3 bg-blue-950/60 border border-blue-800 text-blue-400 rounded text-sm font-semibold text-center shadow-lg">💡 Solution: {solution}</div>;
   return <div className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded text-sm text-center">Make your move on the board...</div>;
+};
+
+const ZwischenzugExplanation = ({ evaluation, puzzle }: { evaluation: any; puzzle: any }) => {
+  if (!evaluation || !puzzle) return null;
+  const candSolution = evaluation.candidates?.find((c: any) => c.bestMove === puzzle.solution_uci);
+  const candBlunder = evaluation.candidates?.find((c: any) => c.bestMove === puzzle.blunder_uci);
+  
+  const getScoreLabel = (cand: any) => {
+    if (!cand) return 'much worse';
+    if (cand.mate !== undefined && cand.mate !== null) return `M${Math.abs(cand.mate)}`;
+    const val = cand.cp ?? cand.score ?? 0;
+    return `${(val / 100).toFixed(2)}`;
+  };
+
+  const solScore = getScoreLabel(candSolution);
+  const blunderScore = getScoreLabel(candBlunder);
+
+  return (
+    <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2">
+      <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Zwischenzug Analysis</div>
+      <div className="text-xs text-zinc-300 leading-relaxed">
+        Instead of playing the natural move <strong className="text-rose-400">{puzzle.blunder_san}</strong> (Eval: <span className="font-mono">{blunderScore}</span>), the best move is the intermediate threat <strong className="text-emerald-400">{puzzle.solution_san}</strong> (Eval: <span className="font-mono">{solScore}</span>).
+      </div>
+    </div>
+  );
 };
 
 const PuzzlePrompt = ({ 
@@ -279,12 +321,13 @@ const BlunderBadge = () => (
 );
 
 export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoadGame?: (pgn: string, startFen: string, gameId: number) => void }) {
-  const [puzzleType, setPuzzleType] = useState<'tactical' | 'book'>('tactical');
+  const [puzzleType, setPuzzleType] = useState<'tactical' | 'book' | 'zwischenzug'>('tactical');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [bookLine, setBookLine] = useState<string | null>(null);
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
   const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
+  const [hint, setHint] = useState<string | null>(null);
 
   const [fetchKey, setFetchKey] = useState(0);
 
@@ -295,6 +338,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   useEffect(() => {
     let active = true;
     setStatus('loading');
+    setHint(null);
     
     fetch(`/api/puzzles?type=${puzzleType}`)
       .then(res => {
@@ -310,6 +354,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         setStatus('playing');
         setActiveLineIdx(0);
         setActiveMoveIdx(-1);
+        setHint(null);
       })
       .catch(() => {
         if (active) setStatus('error');
@@ -358,7 +403,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     return () => window.removeEventListener('keydown', onKey);
   }, [status, puzzleType, puzzle, activeLineIdx, activeMoveIdx, setBoardFen]);
 
-  const handleTypeChange = (type: 'tactical' | 'book') => {
+  const handleTypeChange = (type: 'tactical' | 'book' | 'zwischenzug') => {
     setPuzzleType(type);
     setPuzzle(null);
     setEvaluation(null);
@@ -366,6 +411,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     setBoardFen(STARTING_FEN);
     setActiveLineIdx(0);
     setActiveMoveIdx(-1);
+    setHint(null);
   };
 
   const onReveal = useCallback(() => {
@@ -386,6 +432,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     const uci = sourceSquare + targetSquare + (promo || '');
     const ok = isAcceptableMove(uci, puzzle, evaluation);
     if (ok) {
+      setHint(null);
       const chess = new Chess(boardFen);
       try {
         const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
@@ -395,10 +442,19 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
     } else {
       playErrorSound();
+      if (puzzleType === 'zwischenzug' && uci === puzzle.blunder_uci) {
+        const isCap = puzzle.description?.toLowerCase().includes('captured') || puzzle.description?.toLowerCase().includes('capture');
+        setHint(isCap 
+          ? "Recapturing immediately is too slow. Look for a more dangerous intermediate threat!" 
+          : "Defending directly is too passive. Look for a forcing intermediate counter-threat!"
+        );
+      } else {
+        setHint(null);
+      }
       handleWrongMove(puzzle, setBoardFen, setStatus);
     }
     return ok;
-  }, [puzzle, boardFen, status, evaluation]);
+  }, [puzzle, boardFen, status, evaluation, puzzleType]);
 
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
@@ -454,15 +510,21 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
           <div className="flex bg-zinc-900 p-0.5 rounded-lg mb-6 border border-zinc-855">
             <button 
               onClick={() => handleTypeChange('tactical')}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'tactical' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+              className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'tactical' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
             >
-              Tactical Puzzles
+              Tactical
+            </button>
+            <button 
+              onClick={() => handleTypeChange('zwischenzug')}
+              className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'zwischenzug' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Zwischenzug
             </button>
             <button 
               onClick={() => handleTypeChange('book')}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'book' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+              className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'book' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
             >
-              Book Puzzles
+              Book
             </button>
           </div>
 
@@ -475,7 +537,15 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                 bookLine={bookLine} 
                 onLoadGame={onLoadGame && puzzle.game_pgn ? () => onLoadGame(puzzle.game_pgn, puzzle.start_fen, puzzle.game_id) : undefined}
               />
-              <StatusCard status={status} solution={puzzle.solution_san} isBook={puzzleType === 'book'} />
+              <StatusCard status={status} solution={puzzle.solution_san} puzzleType={puzzleType} hint={hint} />
+              {status === 'playing' && hint && (
+                <div className="mt-2 text-xs text-rose-300 bg-rose-950/20 border border-rose-900/40 rounded p-2.5 text-center leading-relaxed">
+                  💡 Hint: {hint}
+                </div>
+              )}
+              {(status === 'correct' || status === 'solved') && puzzleType === 'zwischenzug' && (
+                <ZwischenzugExplanation evaluation={evaluation} puzzle={puzzle} />
+              )}
               {(status === 'correct' || status === 'solved') && (
                 puzzleType === 'book' ? (
                   <BookLinesList 

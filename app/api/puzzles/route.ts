@@ -34,9 +34,9 @@ function getSan(fen: string, uci: string): string {
   }
 }
 
-async function fetchRandomPuzzle() {
-  const sql = 'SELECT * FROM puzzles ORDER BY RANDOM() LIMIT 1';
-  const rs = await turso.execute(sql);
+async function fetchRandomPuzzle(type = 'tactical') {
+  const sql = 'SELECT * FROM puzzles WHERE type = ? ORDER BY RANDOM() LIMIT 1';
+  const rs = await turso.execute({ sql, args: [type] });
   return rs.rows[0] || null;
 }
 
@@ -272,7 +272,7 @@ export async function GET(req: NextRequest) {
       if (!data) return NextResponse.json({ error: 'No book puzzles found' }, { status: 404 });
       return NextResponse.json(data);
     }
-    const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle();
+    const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle(type);
     if (!puzzle) return NextResponse.json({ error: 'No puzzles found' }, { status: 404 });
     const details = await loadPuzzleDetails(puzzle);
     const gameResult = await fetchGameForScan(Number(puzzle.game_id));
@@ -333,10 +333,136 @@ function buildPuzzleRow(game: any, p: any, history: any[], fens: string[], i: nu
   return [game.id, startFen, bestUci, getSan(startFen, bestUci), uUserColor, desc, blunderUci, blunderSan, gameTitle];
 }
 
-async function insertPuzzle(args: any[]) {
-  const sql = `INSERT OR IGNORE INTO puzzles (game_id, start_fen, solution_uci, solution_san, player_color, description, blunder_uci, blunder_san, game_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-  const rs = await turso.execute({ sql, args });
+async function insertPuzzle(args: any[], type = 'tactical') {
+  const sql = `INSERT OR IGNORE INTO puzzles (game_id, start_fen, solution_uci, solution_san, player_color, description, blunder_uci, blunder_san, game_title, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const rs = await turso.execute({ sql, args: [...args, type] });
   return rs.rowsAffected > 0;
+}
+
+function getCandScore(cand: any): number {
+  if (cand.mate !== undefined && cand.mate !== null) {
+    return cand.mate > 0 ? 10000 - cand.mate : -10000 - cand.mate;
+  }
+  return cand.cp ?? cand.score ?? 0;
+}
+
+function detectZwischenzug(
+  startFen: string,
+  bestUci: string,
+  evalAtStart: any,
+  prevMove: any
+) {
+  if (!evalAtStart || !evalAtStart.candidates || evalAtStart.candidates.length === 0) {
+    return null;
+  }
+
+  const isCapture = prevMove && (prevMove.captured !== undefined || prevMove.san.includes('x'));
+  
+  const chess = new Chess(startFen);
+  const colorToMove = chess.turn();
+  const opponentColor = colorToMove === 'w' ? 'b' : 'w';
+
+  let isThreat = false;
+  let threatenedPieceSquare: string | null = null;
+  let threatenedPieceType: string | null = null;
+
+  if (!isCapture) {
+    const ranks = ['1', '2', '3', '4', '5', '6', '7', '8'];
+    const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    
+    for (const r of ranks) {
+      for (const f of files) {
+        const sq = f + r;
+        const piece = chess.get(sq as any);
+        if (piece && piece.color === colorToMove) {
+          if (chess.isAttacked(sq as any, opponentColor)) {
+            const isHighValue = ['q', 'r', 'b', 'n'].includes(piece.type);
+            if (isHighValue || piece.type === 'p') {
+              isThreat = true;
+              threatenedPieceSquare = sq;
+              threatenedPieceType = piece.type;
+              break;
+            }
+          }
+        }
+      }
+      if (isThreat) break;
+    }
+  }
+
+  if (!isCapture && !isThreat) {
+    return null;
+  }
+
+  const naturalMoves: string[] = [];
+  const allLegalMoves = chess.moves({ verbose: true });
+
+  if (isCapture && prevMove) {
+    const captureSq = prevMove.to;
+    allLegalMoves.forEach(m => {
+      if (m.to === captureSq) {
+        naturalMoves.push(m.from + m.to + (m.promotion || ''));
+      }
+    });
+  } else if (isThreat && threatenedPieceSquare) {
+    allLegalMoves.forEach(m => {
+      if (m.from === threatenedPieceSquare) {
+        naturalMoves.push(m.from + m.to + (m.promotion || ''));
+      }
+    });
+  }
+
+  if (naturalMoves.length === 0) {
+    return null;
+  }
+
+  if (naturalMoves.includes(bestUci)) {
+    return null;
+  }
+
+  const bestCand = evalAtStart.candidates[0];
+  const bestScore = getCandScore(bestCand);
+
+  let naturalScore: number | null = null;
+  for (const cand of evalAtStart.candidates) {
+    if (naturalMoves.includes(cand.bestMove)) {
+      naturalScore = getCandScore(cand);
+      break;
+    }
+  }
+
+  if (naturalScore === null) {
+    const worstCand = evalAtStart.candidates[evalAtStart.candidates.length - 1];
+    naturalScore = getCandScore(worstCand) - 50;
+  }
+
+  if (bestScore - naturalScore >= 150) {
+    const testChess = new Chess(startFen);
+    try {
+      const moveResult = testChess.move({
+        from: bestUci.slice(0, 2),
+        to: bestUci.slice(2, 4),
+        promotion: bestUci[4]
+      });
+      const isForcing = testChess.inCheck() || moveResult.captured || moveResult.san.includes('+') || moveResult.san.includes('#');
+      if (isForcing || bestScore - naturalScore >= 200) {
+        return {
+          solution_san: moveResult ? moveResult.san : bestUci,
+          naturalUci: naturalMoves[0],
+          naturalSan: getSan(startFen, naturalMoves[0]),
+          isCapture,
+          threatenedPieceType,
+          threatenedPieceSquare,
+          bestScore,
+          naturalScore
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string) {
@@ -345,8 +471,33 @@ async function processMoveIndex(game: any, history: any[], fens: string[], normF
   const isWhite = normFens[i].split(' ')[1] === 'w';
   const p = detectBlunderDetails(eb, ea, isWhite);
   if (!p) return false;
+
+  const moveColor = isWhite ? 'w' : 'b';
+  const isOpponent = moveColor !== uUserColor;
+
+  const startFen = isOpponent ? fens[i + 1] : fens[i];
+  const evalAtStart = isOpponent ? ea : eb;
+  const bestUci = isOpponent ? ea.bestMove : eb.bestMove;
+  const prevMove = isOpponent ? history[i] : (i > 0 ? history[i - 1] : null);
+
+  if (bestUci) {
+    const zw = detectZwischenzug(startFen, bestUci, evalAtStart, prevMove);
+    if (zw) {
+      const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
+      const desc = zw.isCapture
+        ? `Opponent captured on ${prevMove.to}. Find the intermediate move (zwischenzug) instead of recapturing!`
+        : `Opponent threatened your ${zw.threatenedPieceType === 'p' ? 'pawn' : zw.threatenedPieceType === 'q' ? 'queen' : zw.threatenedPieceType === 'r' ? 'rook' : zw.threatenedPieceType === 'b' ? 'bishop' : 'knight'}. Find the intermediate move (zwischenzug) instead of directly defending!`;
+      
+      const blunderUci = zw.naturalUci;
+      const blunderSan = zw.naturalSan;
+
+      const row = [game.id, startFen, bestUci, zw.solution_san, uUserColor, desc, blunderUci, blunderSan, gameTitle];
+      return await insertPuzzle(row, 'zwischenzug');
+    }
+  }
+
   const row = buildPuzzleRow(game, { evalBefore: eb, evalAfter: ea }, history, fens, i, uUserColor, isWhite);
-  return row ? await insertPuzzle(row) : false;
+  return row ? await insertPuzzle(row, 'tactical') : false;
 }
 
 async function scanGame(gameId: number) {
