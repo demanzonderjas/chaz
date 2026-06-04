@@ -92,9 +92,139 @@ async function loadPuzzleDetails(puzzle: any) {
   return { evaluation, bookLine };
 }
 
+async function fetchBookPuzzle() {
+  const gamesSql = 'SELECT id, pgn, white_name, black_name, result, user_color, played_date FROM games ORDER BY RANDOM() LIMIT 5';
+  const gamesRs = await turso.execute(gamesSql);
+  if (gamesRs.rows.length === 0) return null;
+
+  for (const game of gamesRs.rows) {
+    const pgn = String(game.pgn);
+    const black = String(game.black_name || '').toLowerCase();
+    const uColor = (game.user_color as string) || (black.includes('demanzonderjas') ? 'b' : 'w');
+
+    const chess = new Chess();
+    try {
+      chess.loadPgn(pgn.trim());
+    } catch {
+      continue;
+    }
+    const history = chess.history({ verbose: true });
+    const startFen = chess.header().FEN || chess.header().Fen || STARTING_FEN;
+    
+    const temp = new Chess(startFen);
+    const positions: { fen: string; bookFen: string; playedMove: { uci: string; san: string } }[] = [];
+    
+    for (const m of history) {
+      const fenBefore = temp.fen();
+      const turn = temp.turn();
+      const uci = m.from + m.to + (m.promotion || '');
+      const san = m.san;
+      
+      if (turn === uColor) {
+        positions.push({
+          fen: fenBefore,
+          bookFen: normalizeBookFen(fenBefore),
+          playedMove: { uci, san },
+        });
+      }
+      temp.move(m.san);
+    }
+
+    if (positions.length === 0) continue;
+
+    const placeholders = positions.map(() => '?').join(',');
+    const bookMovesSql = `
+      SELECT fen_before, uci, san, is_mainline
+      FROM book_moves
+      WHERE fen_before IN (${placeholders})
+    `;
+    const bookMovesArgs = positions.map(p => p.bookFen);
+    const bookMovesRs = await turso.execute({ sql: bookMovesSql, args: bookMovesArgs });
+    
+    if (bookMovesRs.rows.length === 0) continue;
+
+    const bookMovesByFen: Record<string, any[]> = {};
+    bookMovesRs.rows.forEach(row => {
+      const f = String(row.fen_before);
+      if (!bookMovesByFen[f]) bookMovesByFen[f] = [];
+      bookMovesByFen[f].push(row);
+    });
+
+    const candidates: {
+      fen: string;
+      playedUci: string;
+      playedSan: string;
+      isDeviation: boolean;
+      bookMoves: any[];
+    }[] = [];
+
+    positions.forEach(pos => {
+      const bMoves = bookMovesByFen[pos.bookFen];
+      if (!bMoves || bMoves.length === 0) return;
+
+      const playedBookMove = bMoves.some(bm => String(bm.uci) === pos.playedMove.uci);
+      candidates.push({
+        fen: pos.fen,
+        playedUci: pos.playedMove.uci,
+        playedSan: pos.playedMove.san,
+        isDeviation: !playedBookMove,
+        bookMoves: bMoves,
+      });
+    });
+
+    if (candidates.length === 0) continue;
+
+    const deviations = candidates.filter(c => c.isDeviation);
+    const selected = deviations.length > 0
+      ? deviations[Math.floor(Math.random() * deviations.length)]
+      : candidates[Math.floor(Math.random() * candidates.length)];
+
+    const bmMain = selected.bookMoves.find(bm => bm.is_mainline === 1) || selected.bookMoves[0];
+    const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
+    
+    const description = selected.isDeviation
+      ? `You played ${selected.playedSan} in the game. Find the correct book move instead!`
+      : `Find the correct book move in this position from your game!`;
+
+    const puzzle = {
+      id: -Number(game.id) * 1000 - Math.floor(Math.random() * 1000),
+      type: 'book',
+      game_id: game.id,
+      start_fen: selected.fen,
+      solution_uci: String(bmMain.uci),
+      solution_san: String(bmMain.san),
+      player_color: uColor,
+      description,
+      blunder_uci: selected.isDeviation ? selected.playedUci : null,
+      blunder_san: selected.isDeviation ? selected.playedSan : null,
+      game_title: gameTitle,
+      valid_moves: selected.bookMoves.map(bm => String(bm.uci)),
+      valid_moves_san: selected.bookMoves.map(bm => String(bm.san)),
+    };
+
+    const evalPromise = fetchEvaluationForFen(selected.fen);
+    const bookPromise = fetchBookLineForGame(Number(game.id), selected.fen);
+    const [evaluation, bookLine] = await Promise.all([evalPromise, bookPromise]);
+
+    return {
+      puzzle,
+      evaluation,
+      bookLine,
+    };
+  }
+
+  return null;
+}
+
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
+  const type = req.nextUrl.searchParams.get('type') || 'tactical';
   try {
+    if (type === 'book') {
+      const data = await fetchBookPuzzle();
+      if (!data) return NextResponse.json({ error: 'No book puzzles found' }, { status: 404 });
+      return NextResponse.json(data);
+    }
     const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle();
     if (!puzzle) return NextResponse.json({ error: 'No puzzles found' }, { status: 404 });
     const details = await loadPuzzleDetails(puzzle);

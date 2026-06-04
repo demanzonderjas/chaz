@@ -66,6 +66,9 @@ function getEvalLabel(ev: any): string {
 }
 
 function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
+  if (puzzle?.type === 'book') {
+    return puzzle.valid_moves ? puzzle.valid_moves.includes(uci) : uci === puzzle.solution_uci;
+  }
   if (uci === puzzle.solution_uci) return true;
   const lines = ev?.candidates || ev?.lines;
   const best = lines?.[0], cand = lines?.find((l: any) => l.pv?.[0] === uci);
@@ -77,10 +80,13 @@ function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
   return diff <= 50;
 }
 
-async function fetchNextPuzzle(setPuzzle: any, setEval: any, setBook: any, setBoard: any, setStatus: any) {
+async function fetchNextPuzzle(type: 'tactical' | 'book', setPuzzle: any, setEval: any, setBook: any, setBoard: any, setStatus: any) {
   setStatus('loading');
-  const res = await fetch('/api/puzzles');
-  if (!res.ok) return;
+  const res = await fetch(`/api/puzzles?type=${type}`);
+  if (!res.ok) {
+    setStatus('error');
+    return;
+  }
   const data = await res.json();
   setPuzzle(data.puzzle);
   setEval(data.evaluation);
@@ -121,14 +127,21 @@ const CandidateMovesList = ({ evaluation, startFen }: { evaluation: any; startFe
   );
 };
 
+
 function getPromoPiece(pieceType: string, targetSquare: string): string | undefined {
   const isPawn = pieceType.toLowerCase().endsWith('p');
   const isPromoRank = targetSquare[1] === '8' || targetSquare[1] === '1';
   return isPawn && isPromoRank ? 'q' : undefined;
 }
 
-const StatusCard = ({ status, solution }: { status: string; solution: string }) => {
-  if (status === 'correct') return <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">✨ CORRECT! You found the best move.</div>;
+const StatusCard = ({ status, solution, isBook }: { status: string; solution: string; isBook: boolean }) => {
+  if (status === 'correct') {
+    return (
+      <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">
+        {isBook ? '✨ CORRECT! You found the book move.' : '✨ CORRECT! You found the best move.'}
+      </div>
+    );
+  }
   if (status === 'incorrect') return <div className="p-3 bg-rose-950/60 border border-rose-800 text-rose-400 rounded text-sm font-semibold text-center shadow-lg">❌ INCORRECT! That is a mistake, try again.</div>;
   if (status === 'solved') return <div className="p-3 bg-blue-950/60 border border-blue-800 text-blue-400 rounded text-sm font-semibold text-center shadow-lg">💡 Solution: {solution}</div>;
   return <div className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded text-sm text-center">Make your move on the board...</div>;
@@ -190,14 +203,28 @@ const BlunderBadge = () => (
 );
 
 export function PuzzleArena({ onExit }: { onExit: () => void }) {
+  const [puzzleType, setPuzzleType] = useState<'tactical' | 'book'>('tactical');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [bookLine, setBookLine] = useState<string | null>(null);
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
-  const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved'>('loading');
+  const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
 
-  const loadNext = useCallback(() => fetchNextPuzzle(setPuzzle, setEvaluation, setBookLine, setBoardFen, setStatus), []);
-  useEffect(() => { loadNext(); }, [loadNext]);
+  const loadNext = useCallback(() => {
+    fetchNextPuzzle(puzzleType, setPuzzle, setEvaluation, setBookLine, setBoardFen, setStatus);
+  }, [puzzleType]);
+
+  useEffect(() => {
+    loadNext();
+  }, [loadNext]);
+
+  const handleTypeChange = (type: 'tactical' | 'book') => {
+    setPuzzleType(type);
+    setPuzzle(null);
+    setEvaluation(null);
+    setBookLine(null);
+    setBoardFen(STARTING_FEN);
+  };
 
   const onReveal = useCallback(() => {
     if (!puzzle) return;
@@ -230,38 +257,68 @@ export function PuzzleArena({ onExit }: { onExit: () => void }) {
     [puzzle]
   );
 
-  if (status === 'loading') return <div className="flex-1 flex items-center justify-center bg-zinc-950 text-zinc-400 text-sm">Loading next puzzle...</div>;
-  if (!puzzle) return <div className="flex-1 flex items-center justify-center bg-zinc-950 text-zinc-400 text-sm">No puzzles available. Try scanning your library!</div>;
-
   return (
     <div className="flex flex-1 overflow-hidden">
       <div className="flex-1 flex items-center justify-center p-6 bg-zinc-950 relative">
-        <div className="relative aspect-square shadow-2xl rounded-lg overflow-hidden border border-zinc-800/40" style={{ width: 'min(calc(100vh - 120px), calc(100vw - 440px))' }}>
-          <ChessboardProvider
-            options={{
-              position: boardFen,
-              boardOrientation: puzzle.player_color === 'w' ? 'white' : 'black',
-              onPieceDrop,
-              squareRenderer,
-            }}
-          >
-            <Chessboard />
-          </ChessboardProvider>
-          {puzzle.blunder_uci && (
-            <BlunderArrow
-              from={puzzle.blunder_uci.slice(0, 2)}
-              to={puzzle.blunder_uci.slice(2, 4)}
-              orientation={puzzle.player_color === 'w' ? 'white' : 'black'}
-            />
-          )}
-        </div>
+        {status === 'loading' ? (
+          <div className="text-zinc-400 text-sm animate-pulse">Loading next puzzle...</div>
+        ) : status === 'error' || !puzzle ? (
+          <div className="text-zinc-450 text-sm text-center max-w-md px-6 py-8 bg-zinc-900 border border-zinc-850 rounded-xl shadow-lg">
+            <span className="text-2xl block mb-3">🧩</span>
+            {puzzleType === 'book'
+              ? 'No book puzzles found. Make sure you have games imported and book moves indexed!'
+              : 'No puzzles available. Try scanning your library!'}
+          </div>
+        ) : (
+          <div className="relative aspect-square shadow-2xl rounded-lg overflow-hidden border border-zinc-800/40" style={{ width: 'min(calc(100vh - 120px), calc(100vw - 440px))' }}>
+            <ChessboardProvider
+              options={{
+                position: boardFen,
+                boardOrientation: puzzle.player_color === 'w' ? 'white' : 'black',
+                onPieceDrop,
+                squareRenderer,
+              }}
+            >
+              <Chessboard />
+            </ChessboardProvider>
+            {puzzle.blunder_uci && (
+              <BlunderArrow
+                from={puzzle.blunder_uci.slice(0, 2)}
+                to={puzzle.blunder_uci.slice(2, 4)}
+                orientation={puzzle.player_color === 'w' ? 'white' : 'black'}
+              />
+            )}
+          </div>
+        )}
       </div>
       <div className="w-[380px] border-l border-zinc-900 bg-zinc-950/80 backdrop-blur-md p-6 flex flex-col justify-between shrink-0 overflow-y-auto">
         <div>
           <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2 mb-6">🧩 Personal Puzzles</h2>
-          <PuzzlePrompt desc={puzzle.description} title={puzzle.game_title} evaluation={evaluation} bookLine={bookLine} />
-          <StatusCard status={status} solution={puzzle.solution_san} />
-          {(status === 'correct' || status === 'solved') && <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />}
+          
+          <div className="flex bg-zinc-900 p-0.5 rounded-lg mb-6 border border-zinc-855">
+            <button 
+              onClick={() => handleTypeChange('tactical')}
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'tactical' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Tactical Puzzles
+            </button>
+            <button 
+              onClick={() => handleTypeChange('book')}
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'book' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Book Puzzles
+            </button>
+          </div>
+
+          {puzzle && (
+            <>
+              <PuzzlePrompt desc={puzzle.description} title={puzzle.game_title} evaluation={evaluation} bookLine={bookLine} />
+              <StatusCard status={status} solution={puzzle.solution_san} isBook={puzzleType === 'book'} />
+              {(status === 'correct' || status === 'solved') && puzzleType === 'tactical' && (
+                <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />
+              )}
+            </>
+          )}
         </div>
         <PuzzleControls status={status} onNext={loadNext} onReveal={onReveal} onExit={onExit} />
       </div>
