@@ -332,8 +332,21 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [hint, setHint] = useState<string | null>(null);
   const [hasMadeMistake, setHasMadeMistake] = useState(false);
   const [attemptReported, setAttemptReported] = useState(false);
+  const [openings, setOpenings] = useState<{ id: number; name: string; color: string; game_count: number }[]>([]);
+  const [selectedOpening, setSelectedOpening] = useState<string>('all');
 
   const [fetchKey, setFetchKey] = useState(0);
+
+  useEffect(() => {
+    fetch('/api/openings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.openings) {
+          setOpenings(data.openings);
+        }
+      })
+      .catch(err => console.error('Error fetching openings:', err));
+  }, []);
 
   const loadNext = useCallback(() => {
     setFetchKey(k => k + 1);
@@ -360,7 +373,13 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     setHasMadeMistake(false);
     setAttemptReported(false);
     
-    fetch(`/api/puzzles?type=${puzzleType}`)
+    let url = `/api/puzzles?type=${puzzleType}`;
+    if (selectedOpening !== 'all') {
+      const [opId, color] = selectedOpening.split('_');
+      url += `&openingId=${opId}&color=${color}`;
+    }
+
+    fetch(url)
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch puzzle');
         return res.json();
@@ -384,7 +403,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     return () => {
       active = false;
     };
-  }, [puzzleType, fetchKey]);
+  }, [puzzleType, fetchKey, selectedOpening]);
 
   const [activeLineIdx, setActiveLineIdx] = useState<number>(0);
   
@@ -572,6 +591,24 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
             >
               Weakness
             </button>
+          </div>
+
+          <div className="mb-6">
+            <label className="block text-[10px] uppercase font-bold tracking-wider text-zinc-500 mb-1.5">
+              Opening Repertoire Filter
+            </label>
+            <select
+              value={selectedOpening}
+              onChange={(e) => setSelectedOpening(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-xs text-zinc-350 font-semibold focus:outline-none focus:border-zinc-700 cursor-pointer transition-colors"
+            >
+              <option value="all">All Openings</option>
+              {openings.map((op) => (
+                <option key={`${op.id}_${op.color}`} value={`${op.id}_${op.color}`}>
+                  {op.name} ({op.color === 'w' ? 'White' : 'Black'}) — {op.game_count} games
+                </option>
+              ))}
+            </select>
           </div>
 
           {puzzle && (

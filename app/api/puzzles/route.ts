@@ -34,16 +34,26 @@ function getSan(fen: string, uci: string): string {
   }
 }
 
-async function fetchRandomPuzzle(type = 'tactical') {
-  const sql = `
+async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string) {
+  let sql = `
     SELECT p.*, COALESCE(s.mistakes, 0) as mistakes
     FROM puzzles p
+    JOIN games g ON p.game_id = g.id
     LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen
     WHERE p.type = ?
-    ORDER BY RANDOM()
-    LIMIT 30
   `;
-  const rs = await turso.execute({ sql, args: [type] });
+  const args: any[] = [type];
+  if (openingId !== undefined) {
+    sql += ` AND g.opening_id = ?`;
+    args.push(openingId);
+  }
+  if (color !== undefined) {
+    sql += ` AND g.user_color = ?`;
+    args.push(color);
+  }
+  sql += ` ORDER BY RANDOM() LIMIT 30`;
+
+  const rs = await turso.execute({ sql, args });
   if (rs.rows.length === 0) return null;
   
   const pool = rs.rows;
@@ -162,9 +172,20 @@ async function fetchBookLinesForFen(fenBefore: string, posPly: number) {
   return linesData;
 }
 
-async function fetchBookPuzzle() {
-  const gamesSql = 'SELECT id, pgn, white_name, black_name, result, user_color, played_date FROM games ORDER BY RANDOM() LIMIT 5';
-  const gamesRs = await turso.execute(gamesSql);
+async function fetchBookPuzzle(openingId?: number, color?: string) {
+  let gamesSql = 'SELECT id, pgn, white_name, black_name, result, user_color, played_date FROM games WHERE 1=1';
+  const args: any[] = [];
+  if (openingId !== undefined) {
+    gamesSql += ' AND opening_id = ?';
+    args.push(openingId);
+  }
+  if (color !== undefined) {
+    gamesSql += ' AND user_color = ?';
+    args.push(color);
+  }
+  gamesSql += ' ORDER BY RANDOM() LIMIT 5';
+  
+  const gamesRs = await turso.execute({ sql: gamesSql, args });
   if (gamesRs.rows.length === 0) return null;
 
   for (const game of gamesRs.rows) {
@@ -356,16 +377,26 @@ function getGamePlyForFen(pgn: string, targetFen3: string): number {
   return -1;
 }
 
-async function fetchWeaknessPuzzle() {
+async function fetchWeaknessPuzzle(openingId?: number, color?: string) {
   // 1. Fetch 200 random weak moves
-  const pmSql = `
-    SELECT fen_norm, uci, san, wins, draws, losses, game_id
-    FROM position_moves
-    WHERE game_id IS NOT NULL AND (losses > wins OR losses >= 2)
-    ORDER BY RANDOM()
-    LIMIT 200
+  let pmSql = `
+    SELECT pm.fen_norm, pm.uci, pm.san, pm.wins, pm.draws, pm.losses, pm.game_id
+    FROM position_moves pm
+    JOIN games g ON pm.game_id = g.id
+    WHERE pm.game_id IS NOT NULL AND (pm.losses > pm.wins OR pm.losses >= 2)
   `;
-  const pmRs = await turso.execute(pmSql);
+  const args: any[] = [];
+  if (openingId !== undefined) {
+    pmSql += ' AND g.opening_id = ?';
+    args.push(openingId);
+  }
+  if (color !== undefined) {
+    pmSql += ' AND g.user_color = ?';
+    args.push(color);
+  }
+  pmSql += ' ORDER BY RANDOM() LIMIT 200';
+
+  const pmRs = await turso.execute({ sql: pmSql, args });
   if (pmRs.rows.length === 0) return null;
 
   // 2. Map FENs to query
@@ -519,18 +550,24 @@ async function fetchWeaknessPuzzle() {
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
   const type = req.nextUrl.searchParams.get('type') || 'tactical';
+  const openingIdParam = req.nextUrl.searchParams.get('openingId');
+  const colorParam = req.nextUrl.searchParams.get('color');
+
+  const openingId = openingIdParam ? Number(openingIdParam) : undefined;
+  const color = colorParam || undefined;
+
   try {
     if (type === 'book') {
-      const data = await fetchBookPuzzle();
+      const data = await fetchBookPuzzle(openingId, color);
       if (!data) return NextResponse.json({ error: 'No book puzzles found' }, { status: 404 });
       return NextResponse.json(data);
     }
     if (type === 'weakness') {
-      const data = await fetchWeaknessPuzzle();
+      const data = await fetchWeaknessPuzzle(openingId, color);
       if (!data) return NextResponse.json({ error: 'No weakness puzzles found' }, { status: 404 });
       return NextResponse.json(data);
     }
-    const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle(type);
+    const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle(type, openingId, color);
     if (!puzzle) return NextResponse.json({ error: 'No puzzles found' }, { status: 404 });
     const details = await loadPuzzleDetails(puzzle);
     const gameResult = await fetchGameForScan(Number(puzzle.game_id));
