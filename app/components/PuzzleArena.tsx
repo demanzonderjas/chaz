@@ -190,6 +190,15 @@ function getPromoPiece(pieceType: string, targetSquare: string): string | undefi
   return isPawn && isPromoRank ? 'q' : undefined;
 }
 
+function isLegalMove(fen: string, from: string, to: string, promo?: string): boolean {
+  try {
+    const chess = new Chess(fen);
+    return chess.move({ from, to, promotion: promo }) !== null;
+  } catch {
+    return false;
+  }
+}
+
 const StatusCard = ({ 
   status, 
   solution, 
@@ -484,6 +493,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const onPieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: any) => {
     if (!puzzle || status !== 'playing') return false;
     const promo = getPromoPiece(piece.pieceType, targetSquare);
+    if (!isLegalMove(boardFen, sourceSquare, targetSquare, promo)) return false;
     const uci = sourceSquare + targetSquare + (promo || '');
     const ok = isAcceptableMove(uci, puzzle, evaluation);
     if (ok) {
