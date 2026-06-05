@@ -12,6 +12,7 @@ import { GameGraph } from './GameGraph';
 import { DbExplorer } from './DbExplorer';
 import { GameLibrary } from './GameLibrary';
 import { PuzzleArena } from './PuzzleArena';
+import { GamePuzzleArena } from './GamePuzzleArena';
 import { playMoveSound } from '../services/sound';
 
 type Arrow = { startSquare: string; endSquare: string; color: string };
@@ -61,7 +62,9 @@ export function ChessAnalysis() {
   const [cursor, setCursor] = useState(-1);
   const [initialFen, setInitialFen] = useState(STARTING_FEN);
   const [activeGame, setActiveGame] = useState<(GameMeta & { id?: number }) | null>(null);
-  const [mode, setMode] = useState<'analysis' | 'puzzles'>('analysis');
+  const [mode, setMode] = useState<'analysis' | 'puzzles' | 'game-puzzles'>('analysis');
+  const [gameMistakes, setGameMistakes] = useState<any[]>([]);
+  const [loadingGameMistakes, setLoadingGameMistakes] = useState(false);
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
   const [pgnInput, setPgnInput] = useState('');
   const [pgnError, setPgnError] = useState('');
@@ -135,6 +138,16 @@ export function ChessAnalysis() {
   }, [explorerLine, explorerMoveIdx]);
 
   const prevCursorRef = useRef(cursor);
+
+  const startPracticeMode = async () => {
+    setLoadingGameMistakes(true);
+    const list = await compileGameMistakes(history, annotations, orientation, initialFen).catch(() => []);
+    setLoadingGameMistakes(false);
+    if (list.length > 0) {
+      setGameMistakes(list);
+      setMode('game-puzzles');
+    }
+  };
   const prevHistoryRef = useRef(history);
 
   useEffect(() => {
@@ -365,10 +378,18 @@ export function ChessAnalysis() {
                 Analyzing… {progress}%
               </span>
             ) : annotations.length > 0 ? (
-              <button onClick={() => analyzeGame(history, initialFen)}
-                className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors">
-                Re-analyze
-              </button>
+              <>
+                {getPlayerMistakeCount(annotations, orientation) > 0 && (
+                  <button onClick={startPracticeMode} disabled={loadingGameMistakes}
+                    className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50">
+                    {loadingGameMistakes ? 'Loading...' : '🧩 Practice Mistakes'}
+                  </button>
+                )}
+                <button onClick={() => analyzeGame(history, initialFen)}
+                  className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors">
+                  Re-analyze
+                </button>
+              </>
             ) : null
           )}
           <button onClick={() => setMode('puzzles')}
@@ -428,6 +449,12 @@ export function ChessAnalysis() {
       {/* Main area */}
       {mode === 'puzzles' ? (
         <PuzzleArena onExit={() => setMode('analysis')} onLoadGame={loadGameFromPuzzle} />
+      ) : mode === 'game-puzzles' ? (
+        <GamePuzzleArena
+          mistakes={gameMistakes}
+          gameTitle={activeGame ? `${activeGame.white} vs ${activeGame.black}` : 'Active Game'}
+          onExit={() => setMode('analysis')}
+        />
       ) : (
         <div className="flex flex-1 overflow-hidden">
         {/* Eval bar */}
@@ -824,4 +851,60 @@ const SquareAnnotations = ({ types }: { types: string[] }) => (
 function normalizeBookFen(fen: string): string {
   const p = fen.split(' ');
   return `${p[0]} ${p[1]} ${p[2]} -`;
+}
+
+function getPlayedUci(startFen: string, san: string): string {
+  try {
+    const chess = new Chess(startFen);
+    const m = chess.moves({ verbose: true }).find((x) => x.san === san);
+    return m ? m.from + m.to + (m.promotion || '') : '';
+  } catch {
+    return '';
+  }
+}
+
+function getSan(fen: string, uci: string): string {
+  try {
+    const chess = new Chess(fen);
+    const m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    return m ? m.san : uci;
+  } catch {
+    return uci;
+  }
+}
+
+async function fetchMistakeDetail(i: number, fen: string, san: string) {
+  const uci = getPlayedUci(fen, san);
+  const res = await fetch(`/api/analysis?fen=${encodeURIComponent(fen)}&depth=0`);
+  const data = res.ok ? await res.json() : null;
+  if (!data?.cached || !data.result?.bestMove) return null;
+  return {
+    moveIndex: i,
+    startFen: fen,
+    playedSan: san,
+    playedUci: uci,
+    solutionUci: data.result.bestMove,
+    solutionSan: getSan(fen, data.result.bestMove),
+    evaluation: data.result,
+  };
+}
+
+async function compileGameMistakes(h: HistoryEntry[], ann: any[], col: 'white' | 'black', sf: string) {
+  const side = col === 'white' ? 0 : 1, list = [];
+  for (let i = 0; i < h.length; i++) {
+    const a = ann[i], beforeFen = i === 0 ? sf : h[i - 1].fen;
+    if (i % 2 === side && a?.cpLoss !== undefined && a.cpLoss >= 50) {
+      const d = await fetchMistakeDetail(i, beforeFen, h[i].san);
+      if (d) list.push(d);
+    }
+  }
+  return list;
+}
+
+function getPlayerMistakeCount(annotations: any[], orientation: 'white' | 'black'): number {
+  const side = orientation === 'white' ? 0 : 1;
+  return annotations.filter((ann, idx) => {
+    if (idx % 2 !== side) return false;
+    return ann && ann.cpLoss !== undefined && ann.cpLoss >= 50;
+  }).length;
 }
