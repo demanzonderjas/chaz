@@ -15,21 +15,37 @@ async function fetchGamePgn(id: string) {
   return rs.rows[0]?.pgn || null;
 }
 
-async function fetchGamesList() {
-  const sql = 'SELECT id, white_name, black_name, result, played_date, user_color, move_count FROM games ORDER BY played_date DESC, id DESC';
-  const rs = await turso.execute(sql);
+async function fetchGamesList(openingId?: number, color?: string) {
+  let sql = 'SELECT id, white_name, black_name, result, played_date, user_color, move_count FROM games WHERE 1=1';
+  const args: any[] = [];
+  if (openingId !== undefined) {
+    sql += ' AND opening_id = ?';
+    args.push(openingId);
+  }
+  if (color !== undefined) {
+    sql += ' AND user_color = ?';
+    args.push(color);
+  }
+  sql += ' ORDER BY played_date DESC, id DESC';
+  const rs = await turso.execute({ sql, args });
   return rs.rows;
 }
 
-async function handleGetRequest(id: string | null) {
+async function handleGetRequest(id: string | null, openingId?: number, color?: string) {
   if (id) return { pgn: await fetchGamePgn(id) };
-  return { games: await fetchGamesList() };
+  return { games: await fetchGamesList(openingId, color) };
 }
 
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
+  const openingIdParam = req.nextUrl.searchParams.get('openingId');
+  const colorParam = req.nextUrl.searchParams.get('color');
+
+  const openingId = openingIdParam ? Number(openingIdParam) : undefined;
+  const color = colorParam || undefined;
+
   try {
-    const data = await handleGetRequest(id);
+    const data = await handleGetRequest(id, openingId, color);
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

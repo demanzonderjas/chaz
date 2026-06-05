@@ -17,20 +17,32 @@ async function handleGameClick(id: number, onSelect: (pgn: string, id?: number) 
   }
 }
 
-async function fetchGames(setGames: any, setLoading: any) {
-  const r = await fetch('/api/games');
-  const d = await r.json();
-  setGames(d.games || []);
-  setLoading(false);
-}
-
-function useGamesList(isOpen: boolean) {
+function useGamesList(isOpen: boolean, selectedOpening: string) {
   const [games, setGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const refresh = useCallback(() => fetchGames(setGames, setLoading), []);
+  
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    let url = '/api/games';
+    if (selectedOpening !== 'all') {
+      const [opId, color] = selectedOpening.split('_');
+      url += `?openingId=${opId}&color=${color}`;
+    }
+    try {
+      const r = await fetch(url);
+      const d = await r.json();
+      setGames(d.games || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedOpening]);
+
   useEffect(() => {
     if (isOpen) refresh();
   }, [isOpen, refresh]);
+
   return { games, loading, refresh };
 }
 
@@ -103,10 +115,46 @@ const DrawerPanel = ({ isOpen, onClose, children }: any) => (
 );
 
 export function GameLibrary({ isOpen, onClose, onSelectGame }: Props) {
-  const { games, loading, refresh } = useGamesList(isOpen);
+  const [selectedOpening, setSelectedOpening] = useState<string>('all');
+  const [openings, setOpenings] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch('/api/openings')
+        .then(res => res.json())
+        .then(data => {
+          if (data.openings) setOpenings(data.openings);
+        })
+        .catch(err => console.error('Error fetching openings:', err));
+    }
+  }, [isOpen]);
+
+  const { games, loading, refresh } = useGamesList(isOpen, selectedOpening);
+
   const del = useCallback(async (id: number) => {
     if ((await fetch(`/api/games?id=${id}`, { method: 'DELETE' })).ok) refresh();
   }, [refresh]);
-  const body = <DrawerBody loading={loading} games={games} onSelectGame={onSelectGame} onClose={onClose} onDelete={del} />;
-  return <DrawerPanel isOpen={isOpen} onClose={onClose}>{body}</DrawerPanel>;
+
+  return (
+    <DrawerPanel isOpen={isOpen} onClose={onClose}>
+      <div className="px-4 py-3 border-b border-zinc-900 bg-zinc-950 flex flex-col gap-1.5 shrink-0">
+        <label className="block text-[10px] uppercase font-bold tracking-wider text-zinc-500">
+          Filter by Opening
+        </label>
+        <select
+          value={selectedOpening}
+          onChange={(e) => setSelectedOpening(e.target.value)}
+          className="w-full bg-zinc-900 border border-zinc-800 rounded py-1.5 px-2 text-xs text-zinc-350 font-semibold focus:outline-none focus:border-zinc-700 cursor-pointer transition-colors"
+        >
+          <option value="all">All Openings</option>
+          {openings.map((op) => (
+            <option key={`${op.id}_${op.color}`} value={`${op.id}_${op.color}`}>
+              {op.name} ({op.color === 'w' ? 'White' : 'Black'})
+            </option>
+          ))}
+        </select>
+      </div>
+      <DrawerBody loading={loading} games={games} onSelectGame={onSelectGame} onClose={onClose} onDelete={del} />
+    </DrawerPanel>
+  );
 }
