@@ -8,8 +8,11 @@ const authToken = env.match(/TURSO_AUTH_TOKEN=(.+)/)?.[1];
 const client = createClient({ url, authToken });
 
 async function run() {
-  const rs = await client.execute("SELECT type, COUNT(*) as count FROM puzzles GROUP BY type");
-  console.log("Puzzles count by type:");
-  console.log(rs.rows);
+  const rs = await client.execute("SELECT name, sql FROM sqlite_master WHERE type='table'");
+  for (const r of rs.rows) {
+    console.log(`Table: ${r.name}`);
+    console.log(r.sql);
+    console.log('---');
+  }
 }
 run().catch(console.error);

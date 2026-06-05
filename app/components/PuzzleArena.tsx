@@ -7,6 +7,11 @@ import { playMoveSound, playErrorSound } from '../services/sound';
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
+function normalizeBookFen(fen: string): string {
+  const p = fen.split(' ');
+  return `${p[0]} ${p[1]} ${p[2]} -`;
+}
+
 function getSquareCoords(square: string, orientation: 'white' | 'black') {
   const colIndex = square.charCodeAt(0) - 97;
   const rowIndex = parseInt(square[1]) - 1;
@@ -67,6 +72,9 @@ function getEvalLabel(ev: any): string {
 }
 
 function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
+  if (puzzle?.type === 'weakness' && uci === puzzle.blunder_uci) {
+    return false;
+  }
   if (puzzle?.type === 'book') {
     return puzzle.valid_moves ? puzzle.valid_moves.includes(uci) : uci === puzzle.solution_uci;
   }
@@ -119,20 +127,16 @@ const BookLinesList = ({
   bookLines, 
   boardFen, 
   setBoardFen, 
-  startFen,
   activeLineIdx,
   setActiveLineIdx,
-  activeMoveIdx,
-  setActiveMoveIdx
+  activeMoveIdx
 }: { 
   bookLines: any[]; 
   boardFen: string; 
   setBoardFen: (fen: string) => void; 
-  startFen: string;
   activeLineIdx: number;
   setActiveLineIdx: (idx: number) => void;
   activeMoveIdx: number;
-  setActiveMoveIdx: (idx: number) => void;
 }) => {
   if (!bookLines || bookLines.length === 0) return null;
   return (
@@ -150,8 +154,7 @@ const BookLinesList = ({
                 onClick={() => {
                   playMoveSound(false);
                   setActiveLineIdx(lineIdx);
-                  setActiveMoveIdx(-1);
-                  setBoardFen(startFen);
+                  setBoardFen(line.start_fen || STARTING_FEN);
                 }}
                 className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isLineActive && activeMoveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-355'}`}
               >
@@ -165,7 +168,6 @@ const BookLinesList = ({
                     onClick={() => {
                       playMoveSound(move.san.includes('x'));
                       setActiveLineIdx(lineIdx);
-                      setActiveMoveIdx(moveIdx);
                       setBoardFen(move.fen_after);
                     }}
                     className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
@@ -321,13 +323,15 @@ const BlunderBadge = () => (
 );
 
 export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoadGame?: (pgn: string, startFen: string, gameId: number) => void }) {
-  const [puzzleType, setPuzzleType] = useState<'tactical' | 'book' | 'zwischenzug'>('tactical');
+  const [puzzleType, setPuzzleType] = useState<'tactical' | 'book' | 'zwischenzug' | 'weakness'>('tactical');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [bookLine, setBookLine] = useState<string | null>(null);
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
   const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
   const [hint, setHint] = useState<string | null>(null);
+  const [hasMadeMistake, setHasMadeMistake] = useState(false);
+  const [attemptReported, setAttemptReported] = useState(false);
 
   const [fetchKey, setFetchKey] = useState(0);
 
@@ -335,10 +339,26 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     setFetchKey(k => k + 1);
   }, []);
 
+  const reportAttempt = useCallback((success: boolean) => {
+    if (!puzzle || attemptReported) return;
+    setAttemptReported(true);
+    fetch('/api/puzzles/attempt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        puzzleId: puzzle.id,
+        startFen: puzzle.start_fen,
+        success
+      })
+    }).catch(err => console.error('Error reporting puzzle attempt:', err));
+  }, [puzzle, attemptReported]);
+
   useEffect(() => {
     let active = true;
     setStatus('loading');
     setHint(null);
+    setHasMadeMistake(false);
+    setAttemptReported(false);
     
     fetch(`/api/puzzles?type=${puzzleType}`)
       .then(res => {
@@ -353,8 +373,9 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         setBoardFen(data.puzzle.start_fen);
         setStatus('playing');
         setActiveLineIdx(0);
-        setActiveMoveIdx(-1);
         setHint(null);
+        setHasMadeMistake(false);
+        setAttemptReported(false);
       })
       .catch(() => {
         if (active) setStatus('error');
@@ -366,7 +387,22 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   }, [puzzleType, fetchKey]);
 
   const [activeLineIdx, setActiveLineIdx] = useState<number>(0);
-  const [activeMoveIdx, setActiveMoveIdx] = useState<number>(-1);
+  
+  const activeLine = puzzle?.book_lines?.[activeLineIdx];
+  const activeMoveIdx = (() => {
+    if (!activeLine) return -2;
+    const normBoard = normalizeBookFen(boardFen);
+    if (normBoard === normalizeBookFen(activeLine.start_fen || STARTING_FEN)) {
+      return -1;
+    }
+    const moves = activeLine.moves || [];
+    for (let i = 0; i < moves.length; i++) {
+      if (normalizeBookFen(moves[i].fen_after) === normBoard) {
+        return i;
+      }
+    }
+    return -2;
+  })();
 
   useEffect(() => {
     if (status !== 'correct' && status !== 'solved') return;
@@ -382,8 +418,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         e.preventDefault();
         if (activeMoveIdx > -1) {
           const nextIdx = activeMoveIdx - 1;
-          setActiveMoveIdx(nextIdx);
-          const nextFen = nextIdx === -1 ? puzzle.start_fen : activeLine.moves[nextIdx].fen_after;
+          const nextFen = nextIdx === -1 ? (activeLine.start_fen || STARTING_FEN) : activeLine.moves[nextIdx].fen_after;
           playMoveSound(false);
           setBoardFen(nextFen);
         }
@@ -391,7 +426,6 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         e.preventDefault();
         if (activeMoveIdx < activeLine.moves.length - 1) {
           const nextIdx = activeMoveIdx + 1;
-          setActiveMoveIdx(nextIdx);
           const nextMove = activeLine.moves[nextIdx];
           playMoveSound(nextMove.san.includes('x'));
           setBoardFen(nextMove.fen_after);
@@ -401,21 +435,23 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [status, puzzleType, puzzle, activeLineIdx, activeMoveIdx, setBoardFen]);
+  }, [status, puzzleType, puzzle, activeLineIdx, activeMoveIdx, activeLine, setBoardFen]);
 
-  const handleTypeChange = (type: 'tactical' | 'book' | 'zwischenzug') => {
+  const handleTypeChange = (type: 'tactical' | 'book' | 'zwischenzug' | 'weakness') => {
     setPuzzleType(type);
     setPuzzle(null);
     setEvaluation(null);
     setBookLine(null);
     setBoardFen(STARTING_FEN);
     setActiveLineIdx(0);
-    setActiveMoveIdx(-1);
     setHint(null);
+    setHasMadeMistake(false);
+    setAttemptReported(false);
   };
 
   const onReveal = useCallback(() => {
     if (!puzzle) return;
+    reportAttempt(false);
     const chess = new Chess(boardFen);
     try {
       const m = chess.move({ from: puzzle.solution_uci.slice(0, 2), to: puzzle.solution_uci.slice(2, 4), promotion: puzzle.solution_uci[4] });
@@ -424,7 +460,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     } catch {}
     setBoardFen(chess.fen());
     setStatus('solved');
-  }, [puzzle, boardFen]);
+  }, [puzzle, boardFen, reportAttempt]);
 
   const onPieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: any) => {
     if (!puzzle || status !== 'playing') return false;
@@ -433,6 +469,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     const ok = isAcceptableMove(uci, puzzle, evaluation);
     if (ok) {
       setHint(null);
+      reportAttempt(!hasMadeMistake);
       const chess = new Chess(boardFen);
       try {
         const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
@@ -442,19 +479,22 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
     } else {
       playErrorSound();
+      setHasMadeMistake(true);
       if (puzzleType === 'zwischenzug' && uci === puzzle.blunder_uci) {
         const isCap = puzzle.description?.toLowerCase().includes('captured') || puzzle.description?.toLowerCase().includes('capture');
         setHint(isCap 
           ? "Recapturing immediately is too slow. Look for a more dangerous intermediate threat!" 
           : "Defending directly is too passive. Look for a forcing intermediate counter-threat!"
         );
+      } else if (puzzleType === 'weakness' && uci === puzzle.blunder_uci) {
+        setHint(`That is the move you played in the game (${puzzle.blunder_san}) which led to a loss. Find the engine's best move instead!`);
       } else {
         setHint(null);
       }
       handleWrongMove(puzzle, setBoardFen, setStatus);
     }
     return ok;
-  }, [puzzle, boardFen, status, evaluation, puzzleType]);
+  }, [puzzle, boardFen, status, evaluation, puzzleType, hasMadeMistake, reportAttempt]);
 
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
@@ -507,24 +547,30 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         <div>
           <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2 mb-6">🧩 Personal Puzzles</h2>
           
-          <div className="flex bg-zinc-900 p-0.5 rounded-lg mb-6 border border-zinc-855">
+          <div className="grid grid-cols-4 bg-zinc-900 p-0.5 rounded-lg mb-6 border border-zinc-850">
             <button 
               onClick={() => handleTypeChange('tactical')}
-              className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'tactical' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'tactical' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
             >
               Tactical
             </button>
             <button 
               onClick={() => handleTypeChange('zwischenzug')}
-              className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'zwischenzug' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'zwischenzug' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
             >
               Zwischenzug
             </button>
             <button 
               onClick={() => handleTypeChange('book')}
-              className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'book' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'book' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
             >
               Book
+            </button>
+            <button 
+              onClick={() => handleTypeChange('weakness')}
+              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'weakness' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Weakness
             </button>
           </div>
 
@@ -552,11 +598,9 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                     bookLines={puzzle.book_lines} 
                     boardFen={boardFen} 
                     setBoardFen={setBoardFen} 
-                    startFen={puzzle.start_fen} 
                     activeLineIdx={activeLineIdx}
                     setActiveLineIdx={setActiveLineIdx}
                     activeMoveIdx={activeMoveIdx}
-                    setActiveMoveIdx={setActiveMoveIdx}
                   />
                 ) : (
                   <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />

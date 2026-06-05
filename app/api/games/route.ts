@@ -77,22 +77,22 @@ function getMoveOutcome(result: string, userColor: string) {
   return 'loss';
 }
 
-async function upsertMoveStat(fen: string, uci: string, san: string, outcome: string) {
-  const sql = `INSERT INTO position_moves (fen_norm, uci, san, wins, draws, losses) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(fen_norm, uci) DO UPDATE SET wins=wins+excluded.wins, draws=draws+excluded.draws, losses=losses+excluded.losses`;
+async function upsertMoveStat(fen: string, uci: string, san: string, outcome: string, gameId: number) {
+  const sql = `INSERT INTO position_moves (fen_norm, uci, san, wins, draws, losses, game_id) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(fen_norm, uci) DO UPDATE SET wins=wins+excluded.wins, draws=draws+excluded.draws, losses=losses+excluded.losses, game_id=excluded.game_id`;
   const w = outcome === 'win' ? 1 : 0, d = outcome === 'draw' ? 1 : 0, l = outcome === 'loss' ? 1 : 0;
-  await turso.execute({ sql, args: [fen, uci, san, w, d, l] });
+  await turso.execute({ sql, args: [fen, uci, san, w, d, l, gameId] });
 }
 
-async function processMove(m: any, tempChess: Chess, outcome: string) {
+async function processMove(m: any, tempChess: Chess, outcome: string, gameId: number) {
   const parts = tempChess.fen().split(' ');
   const fenNorm = `${parts[0]} ${parts[1]} ${parts[2]}`;
   const uci = m.from + m.to + (m.promotion || '');
-  await upsertMoveStat(fenNorm, uci, m.san, outcome);
+  await upsertMoveStat(fenNorm, uci, m.san, outcome, gameId);
   tempChess.move(m.san);
 }
 
-async function indexGameMoves(pgn: string, result: string, userColor: string) {
+async function indexGameMoves(gameId: number, pgn: string, result: string, userColor: string) {
   const chess = new Chess();
   chess.loadPgn(pgn.trim());
   const history = chess.history({ verbose: true });
@@ -100,7 +100,7 @@ async function indexGameMoves(pgn: string, result: string, userColor: string) {
   const tempChess = startFen ? new Chess(startFen) : new Chess();
   const outcome = getMoveOutcome(result, userColor);
   for (const m of history) {
-    await processMove(m, tempChess, outcome);
+    await processMove(m, tempChess, outcome, gameId);
   }
 }
 
@@ -116,8 +116,9 @@ async function handleImport(pgn: string) {
   if (existingId) return { success: true, duplicate: true, id: existingId };
   const d = parseGameDetails(pgn);
   await insertGame(pgn, hash, d);
-  await indexGameMoves(pgn, d.result, d.userColor);
   const newId = await fetchGameIdByHash(hash);
+  if (!newId) throw new Error('Failed to retrieve game ID after insert');
+  await indexGameMoves(newId, pgn, d.result, d.userColor);
   return { success: true, duplicate: false, id: newId };
 }
 
