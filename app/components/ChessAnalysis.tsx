@@ -14,6 +14,8 @@ import { GameLibrary } from './GameLibrary';
 import { PuzzleArena } from './PuzzleArena';
 import { GamePuzzleArena } from './GamePuzzleArena';
 import { playMoveSound } from '../services/sound';
+import { preprocessPgn, isUserBlack } from '../services/pgn';
+
 
 type Arrow = { startSquare: string; endSquare: string; color: string };
 
@@ -727,7 +729,7 @@ function tryMakeMove(chess: Chess, uci: string) {
 
 function parsePgn(pgn: string) {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const sf = chess.header().FEN || chess.header().Fen || STARTING_FEN;
   const replay = sf !== STARTING_FEN ? new Chess(sf) : new Chess();
   const entries = chess.history({ verbose: true }).map((m) => {
@@ -746,7 +748,7 @@ function saveGamePgn(pgn: string, setActiveGame: any) {
 
 function parseGameMeta(pgn: string): GameMeta {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const h = chess.header();
   const white = h.White || 'Unknown', black = h.Black || 'Unknown';
   return { white, black, result: h.Result || '*', date: h.Date || 'Unknown' };
@@ -759,11 +761,10 @@ function setupGameMeta(pgn: string, setOrientation: any, setActiveGame: any, id?
 
 function getPlayerOrientation(pgn: string): 'white' | 'black' {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const headers = chess.header();
-  const white = (headers['White'] ?? '').toLowerCase();
-  const black = (headers['Black'] ?? '').toLowerCase();
-  return black.includes('demanzonderjas') ? 'black' : 'white';
+  const black = headers['Black'] ?? '';
+  return isUserBlack(black) ? 'black' : 'white';
 }
 
 function buildVariationEntries(startFen: string, pv: string[]): HistoryEntry[] {
