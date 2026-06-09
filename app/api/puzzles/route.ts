@@ -34,48 +34,41 @@ function getSan(fen: string, uci: string): string {
   }
 }
 
-async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string) {
-  let sql = `
-    SELECT p.*, COALESCE(s.mistakes, 0) as mistakes
-    FROM puzzles p
-    JOIN games g ON p.game_id = g.id
-    LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen
-    WHERE p.type = ?
-  `;
-  const args: any[] = [type];
-  if (openingId !== undefined) {
-    sql += ` AND g.opening_id = ?`;
-    args.push(openingId);
-  }
-  if (color !== undefined) {
-    sql += ` AND g.user_color = ?`;
-    args.push(color);
-  }
-  sql += ` ORDER BY RANDOM() LIMIT 30`;
+function buildPuzzleSql(openingId?: number, color?: string): { sql: string; args: any[] } {
+  let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ?`;
+  const args: any[] = [];
+  if (openingId !== undefined) { sql += ` AND g.opening_id = ?`; args.push(openingId); }
+  if (color !== undefined) { sql += ` AND g.user_color = ?`; args.push(color); }
+  sql += ` ORDER BY g.played_date DESC, g.id DESC LIMIT 150`;
+  return { sql, args };
+}
 
-  const rs = await turso.execute({ sql, args });
-  if (rs.rows.length === 0) return null;
-  
-  const pool = rs.rows;
-  
-  // Calculate weights based on mistakes (1 + mistakes * 5)
-  let totalWeight = 0;
-  const weightedPool = pool.map(row => {
-    const mistakes = Number(row.mistakes || 0);
-    const weight = 1 + mistakes * 5;
-    totalWeight += weight;
-    return { row, weight };
+function computeWeights(pool: any[]) {
+  const N = pool.length;
+  let total = 0;
+  const items = pool.map((r, i) => {
+    const w = (1 + Number(r.mistakes || 0) * 5) * (N - i);
+    total += w;
+    return { r, w };
   });
-  
-  let randomVal = Math.random() * totalWeight;
-  for (const item of weightedPool) {
-    randomVal -= item.weight;
-    if (randomVal <= 0) {
-      return item.row;
-    }
+  return { items, total };
+}
+
+function chooseItem(items: any[], total: number, fallback: any) {
+  let rand = Math.random() * total;
+  for (const x of items) {
+    rand -= x.w;
+    if (rand <= 0) return x.r;
   }
-  
-  return pool[0];
+  return fallback;
+}
+
+async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string) {
+  const { sql, args } = buildPuzzleSql(openingId, color);
+  const rs = await turso.execute({ sql, args: [type, ...args] });
+  if (rs.rows.length === 0) return null;
+  const { items, total } = computeWeights(rs.rows);
+  return chooseItem(items, total, rs.rows[0]);
 }
 
 async function fetchPuzzleById(id: string) {

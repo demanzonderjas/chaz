@@ -32,12 +32,14 @@ function errorResponse(err: any) {
 }
 
 export async function GET(req: NextRequest) {
-  const fen = req.nextUrl.searchParams.get('fen');
-  const depth = parseInt(req.nextUrl.searchParams.get('depth') || '0');
+  const fen = req.nextUrl.searchParams.get('fen'), depth = parseInt(req.nextUrl.searchParams.get('depth') || '0');
   const eng = req.nextUrl.searchParams.get('engine') || 'sf18';
   if (!fen) return NextResponse.json({ cached: false });
-  const row = await getCachedRow(eng, fen, 1).catch(() => null);
-  return NextResponse.json(buildGetResult(row, depth));
+  const r1 = await getCachedRow(eng, fen, 1).catch(() => null);
+  if (r1 && JSON.parse(r1.result_json as string).pv?.length) return NextResponse.json(buildGetResult(r1, depth));
+  const r4 = await getCachedRow(eng, fen, 4).catch(() => null);
+  if (r4 && JSON.parse(r4.result_json as string).pv?.length) return NextResponse.json(buildGetResult(r4, depth));
+  return NextResponse.json(buildGetResult(r1, depth));
 }
 
 export async function POST(req: NextRequest) {

@@ -47,6 +47,7 @@ class StockfishScheduler {
   private annotationQueue: AnnotationTask[] = [];
   private activeAnnotation: AnnotationTask | null = null;
   private lastAnnotationScore = 0;
+  private lastAnnotationPv: string[] = [];
   private onProgressCallback: ((completed: number, total: number) => void) | null = null;
   private onFinishedCallback: (() => void) | null = null;
   private totalAnnotationTasks = 0;
@@ -92,10 +93,11 @@ class StockfishScheduler {
   private handleInfo(line: string) {
     if (!line.includes('score')) return;
     if (this.liveTask) {
-      const pvLine = this.parsePvLine(line, this.liveTask.color);
-      this.accumulateLiveLine(pvLine);
+      this.accumulateLiveLine(this.parsePvLine(line, this.liveTask.color));
     } else if (this.activeAnnotation) {
       this.lastAnnotationScore = this.parseAnnotationScore(line, this.activeAnnotation.color);
+      const m = line.match(/ pv (.+)/);
+      if (m) this.lastAnnotationPv = m[1].trim().split(' ');
     }
   }
 
@@ -180,7 +182,7 @@ class StockfishScheduler {
   private saveAnnotationResult(task: AnnotationTask, mv: string) {
     const s = this.lastAnnotationScore;
     this.saveCache(task.fen, task.depth, task.color, {
-      depth: task.depth, score: s, bestMove: mv, pv: [],
+      depth: task.depth, score: s, bestMove: mv, pv: this.lastAnnotationPv,
       mate: Math.abs(s) >= 30000 ? (s > 0 ? 30000 : -30000) : null,
     });
     task.onScore(s);
@@ -246,6 +248,7 @@ class StockfishScheduler {
     if (!next) return this.onFinishedCallback?.();
     this.activeAnnotation = next;
     this.lastAnnotationScore = 0;
+    this.lastAnnotationPv = [];
     this.notifyProgress();
     await this.processAnnotation(next);
   }

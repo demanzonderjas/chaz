@@ -101,7 +101,7 @@ export function ChessAnalysis() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
-      if (explorerLine) return; // Skip game arrow keys if in explorer
+      if (explorerLine || mode !== 'analysis') return;
       if (e.key === 'ArrowLeft') setCursor((c) => Math.max(-1, c - 1));
       else if (e.key === 'ArrowRight') setCursor((c) => Math.min(history.length - 1, c + 1));
       else if (e.key === 'ArrowUp') setCursor(-1);
@@ -109,7 +109,7 @@ export function ChessAnalysis() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [history.length, explorerLine]);
+  }, [history.length, explorerLine, mode]);
 
   // Keyboard navigation for explorer line
   useEffect(() => {
@@ -139,7 +139,7 @@ export function ChessAnalysis() {
 
   const prevCursorRef = useRef(cursor);
 
-  const startPracticeMode = async () => {
+  const loadAndStartPractice = async () => {
     setLoadingGameMistakes(true);
     const list = await compileGameMistakes(history, annotations, orientation, initialFen).catch(() => []);
     setLoadingGameMistakes(false);
@@ -147,6 +147,14 @@ export function ChessAnalysis() {
       setGameMistakes(list);
       setMode('game-puzzles');
     }
+  };
+
+  const startPracticeMode = () => {
+    if (getPlayerMistakeCount(annotations, orientation) === 0) {
+      alert("No mistakes were made on your end in this game! Perfect game! 🎉");
+      return;
+    }
+    loadAndStartPractice();
   };
   const prevHistoryRef = useRef(history);
 
@@ -206,21 +214,23 @@ export function ChessAnalysis() {
       const promo = getPromotionPiece(piece.pieceType, targetSquare);
       const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
       if (!entry) return false;
+      if (!baseState) setBaseState({ history, cursor });
       updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen);
       return true;
     },
-    [currentFen, cursor, analyzeLastMove, initialFen]
+    [currentFen, cursor, analyzeLastMove, initialFen, baseState, history]
   );
 
   const playUciMove = useCallback((uci: string) => {
     setExplorerLine(null);
     const chess = new Chess(currentFen), m = tryMakeMove(chess, uci);
     if (!m) return;
+    if (!baseState) setBaseState({ history, cursor });
     const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
     setHistory(next);
     setCursor(next.length - 1);
     setTimeout(() => analyzeLastMove(next, initialFen), 0);
-  }, [currentFen, cursor, history, analyzeLastMove, initialFen]);
+  }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState]);
 
   const loadRawPgn = useCallback((pgn: string, id?: number) => {
     const { sf, entries } = parsePgn(pgn);
@@ -304,12 +314,13 @@ export function ChessAnalysis() {
   const arrows: Arrow[] = Array.from(arrowMap.values());
 
   // Board annotation overlay — show icon on the destination square of the current move
-  const annotationSquare = cursor >= 0 ? history[cursor]?.to : null;
-  const currentAnnotation = cursor >= 0 ? annotations[cursor] : null;
+  const isVarMove = baseState !== null && cursor > baseState.cursor;
+  const annotationSquare = cursor >= 0 && !isVarMove ? history[cursor]?.to : null;
+  const currentAnnotation = cursor >= 0 && !isVarMove ? annotations[cursor] : null;
 
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
-      const show = square === annotationSquare && currentAnnotation?.types.length;
+      const show = !!(square === annotationSquare && currentAnnotation?.types?.length);
       return (
         <div className="relative w-full h-full">
           {children}
@@ -379,12 +390,10 @@ export function ChessAnalysis() {
               </span>
             ) : annotations.length > 0 ? (
               <>
-                {getPlayerMistakeCount(annotations, orientation) > 0 && (
-                  <button onClick={startPracticeMode} disabled={loadingGameMistakes}
-                    className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50">
-                    {loadingGameMistakes ? 'Loading...' : '🧩 Practice Mistakes'}
-                  </button>
-                )}
+                <button onClick={startPracticeMode} disabled={loadingGameMistakes}
+                  className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50">
+                  {loadingGameMistakes ? 'Loading...' : '🧩 Practice Mistakes'}
+                </button>
                 <button onClick={() => analyzeGame(history, initialFen)}
                   className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors">
                   Re-analyze
@@ -453,6 +462,7 @@ export function ChessAnalysis() {
         <GamePuzzleArena
           mistakes={gameMistakes}
           gameTitle={activeGame ? `${activeGame.white} vs ${activeGame.black}` : 'Active Game'}
+          playerColor={orientation}
           onExit={() => setMode('analysis')}
         />
       ) : (
@@ -464,7 +474,7 @@ export function ChessAnalysis() {
 
         {/* Board */}
         <div className="flex flex-col items-center justify-center flex-1 p-2 gap-4">
-          <div className="relative aspect-square" style={{ width: 'min(calc(100vh - 280px), calc(100vw - 560px))' }}>
+          <div className="relative aspect-square" style={{ width: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>
             <ChessboardProvider
               options={{
                 position: boardFen,
@@ -482,13 +492,13 @@ export function ChessAnalysis() {
             </ChessboardProvider>
             <CustomBoardArrows arrows={arrows} orientation={orientation} />
           </div>
-          <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 560px))' }}>
+          <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>
             <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => { setCursor(i); setExplorerLine(null); }} />
           </div>
         </div>
 
         {/* Right panel */}
-        <div className="w-[500px] flex flex-col border-l border-zinc-800 shrink-0">
+        <div className="w-[760px] flex flex-col border-l border-zinc-800 shrink-0">
           {baseState && (
             <div className="bg-blue-950/40 border-b border-blue-900/60 p-2.5 text-center flex flex-col gap-1.5 shrink-0 select-none">
               <span className="text-xs text-blue-300 font-semibold flex items-center justify-center gap-1">🔍 Viewing Variation Line</span>
@@ -873,30 +883,33 @@ function getSan(fen: string, uci: string): string {
   }
 }
 
-async function fetchMistakeDetail(i: number, fen: string, san: string) {
-  const uci = getPlayedUci(fen, san);
+async function fetchBookSolutions(fen: string, detail: any) {
+  const res = await fetch(`/api/book-moves?fen=${encodeURIComponent(fen)}`);
+  const data = res.ok ? await res.json() : null, moves = data?.moves || [];
+  if (moves.length) {
+    detail.solutionUci = moves[0].uci;
+    detail.solutionSan = moves[0].san;
+    detail.solutionUcis = moves.map((m: any) => m.uci);
+  }
+  if (data?.pv?.length) detail.evaluation = { ...detail.evaluation, pv: data.pv };
+}
+
+async function fetchMistakeDetail(i: number, fen: string, san: string, isMissedBook?: boolean) {
   const res = await fetch(`/api/analysis?fen=${encodeURIComponent(fen)}&depth=0`);
   const data = res.ok ? await res.json() : null;
   if (!data?.cached || !data.result?.bestMove) return null;
-  return {
-    moveIndex: i,
-    startFen: fen,
-    playedSan: san,
-    playedUci: uci,
-    solutionUci: data.result.bestMove,
-    solutionSan: getSan(fen, data.result.bestMove),
-    evaluation: data.result,
-  };
+  const detail: any = { moveIndex: i, startFen: fen, playedSan: san, playedUci: getPlayedUci(fen, san), evaluation: data.result, solutionUci: data.result.bestMove, solutionSan: getSan(fen, data.result.bestMove) };
+  if (isMissedBook) await fetchBookSolutions(fen, detail);
+  return detail;
 }
 
 async function compileGameMistakes(h: HistoryEntry[], ann: any[], col: 'white' | 'black', sf: string) {
   const side = col === 'white' ? 0 : 1, list = [];
   for (let i = 0; i < h.length; i++) {
-    const a = ann[i], beforeFen = i === 0 ? sf : h[i - 1].fen;
-    if (i % 2 === side && a?.cpLoss !== undefined && a.cpLoss >= 50) {
-      const d = await fetchMistakeDetail(i, beforeFen, h[i].san);
-      if (d) list.push(d);
-    }
+    const a = ann[i], before = i === 0 ? sf : h[i - 1].fen;
+    if (i % 2 !== side || !a || (!a.isMissedBook && (a.cpLoss === undefined || a.cpLoss < 50))) continue;
+    const d = await fetchMistakeDetail(i, before, h[i].san, a.isMissedBook);
+    if (d) list.push({ ...d, cpLoss: a.cpLoss ?? 0, isMissedBook: a.isMissedBook });
   }
   return list;
 }
@@ -904,7 +917,7 @@ async function compileGameMistakes(h: HistoryEntry[], ann: any[], col: 'white' |
 function getPlayerMistakeCount(annotations: any[], orientation: 'white' | 'black'): number {
   const side = orientation === 'white' ? 0 : 1;
   return annotations.filter((ann, idx) => {
-    if (idx % 2 !== side) return false;
-    return ann && ann.cpLoss !== undefined && ann.cpLoss >= 50;
+    if (idx % 2 !== side || !ann) return false;
+    return (ann.cpLoss !== undefined && ann.cpLoss >= 50) || ann.isMissedBook;
   }).length;
 }

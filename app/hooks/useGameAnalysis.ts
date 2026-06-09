@@ -7,6 +7,7 @@ export type MoveAnnotation = {
   types: AnnotationType[];
   cpLoss?: number;
   score?: number;
+  isMissedBook?: boolean;
 };
 
 export const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -22,13 +23,14 @@ interface AnalysisContext {
   scoresRef: React.MutableRefObject<Record<number, number>>;
 }
 
-async function fetchBookIndices(positions: { fen: string; san: string }[]): Promise<Set<number>> {
+async function fetchBookData(positions: { fen: string; san: string }[]) {
   try {
     const body = JSON.stringify({ positions });
     const res = await fetch('/api/annotate-game', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-    return new Set((await res.json()).bookIndices ?? []);
+    const d = res.ok ? await res.json() : null;
+    return { book: new Set<number>(d?.bookIndices), options: new Set<number>(d?.optionIndices) };
   } catch {
-    return new Set();
+    return { book: new Set<number>(), options: new Set<number>() };
   }
 }
 
@@ -46,11 +48,13 @@ function classifyMove(cpBefore: number, cpAfter: number): AnnotationType | null 
   return null;
 }
 
-const getUpdatedAnnotation = (existingTypes: AnnotationType[], cpBefore: number, cpAfter: number, afterScore: number) => {
-  const types: AnnotationType[] = existingTypes.filter((t) => t === 'book');
-  const engineType = classifyMove(cpBefore, cpAfter);
+const getUpdatedAnnotation = (existing: MoveAnnotation, cpBefore: number, cpAfter: number, afterScore: number) => {
+  const types: AnnotationType[] = (existing.types ?? []).filter((t) => t === 'book');
+  const isBook = types.includes('book');
+  let engineType = isBook ? null : classifyMove(cpBefore, cpAfter);
+  if (!isBook && existing.isMissedBook && !engineType) engineType = 'mistake';
   if (engineType) types.push(engineType);
-  return { types, cpLoss: cpBefore - cpAfter, score: afterScore };
+  return { ...existing, types, cpLoss: isBook ? 0 : cpBefore - cpAfter, score: afterScore };
 };
 
 const updateMoveAnnotation = (ctx: AnalysisContext, moveIdx: number) => {
@@ -59,7 +63,7 @@ const updateMoveAnnotation = (ctx: AnalysisContext, moveIdx: number) => {
   const sign = moveIdx % 2 === 0 ? 1 : -1;
   ctx.setAnnotations((prev) => {
     const next = [...prev];
-    next[moveIdx] = getUpdatedAnnotation(next[moveIdx]?.types ?? [], s[moveIdx] * sign, s[moveIdx + 1] * sign, s[moveIdx + 1]);
+    next[moveIdx] = getUpdatedAnnotation(next[moveIdx] ?? { types: [] }, s[moveIdx] * sign, s[moveIdx + 1] * sign, s[moveIdx + 1]);
     return next;
   });
 };
@@ -89,13 +93,11 @@ const registerSchedulerCallbacks = (ctx: AnalysisContext) => {
 };
 
 const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN) => {
-  const positions = history.map((h, i) => ({
-    fen: i === 0 ? startFen : history[i - 1].fen,
-    san: h.san,
-  }));
-  const bookIndices = await fetchBookIndices(positions);
+  const positions = history.map((h, i) => ({ fen: i === 0 ? startFen : history[i - 1].fen, san: h.san }));
+  const data = await fetchBookData(positions);
   ctx.setAnnotations(history.map((_, i) => ({
-    types: bookIndices.has(i) ? (['book'] as AnnotationType[]) : [],
+    types: data.book.has(i) ? (['book'] as AnnotationType[]) : [],
+    isMissedBook: !data.book.has(i) && data.options.has(i),
   })));
 };
 
@@ -135,8 +137,9 @@ const queueMoveEvaluation = (ctx: AnalysisContext, i: number, before: string, af
 export const analyzeLastMoveImpl = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN) => {
   if (!history.length) return;
   const i = history.length - 1, before = i === 0 ? startFen : history[i - 1].fen;
-  const books = await fetchBookIndices([{ fen: before, san: history[i].san }]);
-  ctx.setAnnotations((prev) => Object.assign([...prev], { [i]: { types: books.has(0) ? ['book'] : [] } }));
+  const data = await fetchBookData([{ fen: before, san: history[i].san }]);
+  const entry = { types: data.book.has(0) ? ['book'] : [], isMissedBook: !data.book.has(0) && data.options.has(0) };
+  ctx.setAnnotations((prev) => Object.assign([...prev], { [i]: entry }));
   queueMoveEvaluation(ctx, i, before, history[i].fen);
 };
 

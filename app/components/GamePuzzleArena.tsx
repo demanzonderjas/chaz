@@ -109,16 +109,55 @@ const GamePuzzleHeader = ({ index, total, evaluation }: any) => (
 const GamePuzzlePrompt = ({ mistake, gameTitle, index, total, evaluation }: any) => (
   <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4">
     <GamePuzzleHeader index={index} total={total} evaluation={evaluation} />
-    <div className="text-sm font-bold text-zinc-100 mb-3 leading-relaxed">You played <span className="text-rose-450 font-extrabold">{mistake.playedSan}</span>. Find the correct move!</div>
-    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-0.5">Source Game</div>
-    <div className="text-xs text-zinc-300 font-medium truncate">{gameTitle}</div>
+    <div className="text-sm font-bold text-zinc-100 mb-3 leading-relaxed">
+      {mistake.isMissedBook ? 'You played a non-book move: ' : 'You played '}<span className="text-rose-450 font-extrabold">{mistake.playedSan}</span>{mistake.cpLoss !== undefined && <span className="text-rose-400 font-semibold text-xs ml-1">(-{(mistake.cpLoss / 100).toFixed(2)})</span>}. Find the correct move!
+    </div>
+    <div className="text-[10px] uppercase font-bold text-zinc-500 mb-0.5">Source Game</div>
+    <div className="text-xs text-zinc-300 truncate">{gameTitle}</div>
   </div>
 );
 
-const GameStatusCard = ({ status, solution }: { status: string; solution: string }) => {
-  if (status === 'correct') return <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">✨ CORRECT! You found the best move.</div>;
+function moveSafe(chess: Chess, m: string) {
+  try {
+    const r = chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+    return { san: r.san, fen: chess.fen() };
+  } catch { return null; }
+}
+
+function getBestLineMoves(mistake: any): { san: string; fen: string }[] {
+  const pv = mistake?.evaluation?.pv || [], chess = new Chess(mistake?.startFen);
+  return pv.slice(0, 14).map((m: string) => moveSafe(chess, m)).filter(Boolean) as any;
+}
+
+const BestLineViewer = ({ moves, boardFen, setBoardFen, startFen, theme }: any) =>
+  !moves?.length ? null : (
+    <div className="flex flex-wrap gap-1 items-center justify-center mt-1">
+      <span className={`text-[10px] uppercase font-bold mr-1 ${theme === 'emerald' ? 'text-emerald-500' : 'text-blue-350'}`}>Best line:</span>
+      <button onClick={() => setBoardFen(startFen)} className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${boardFen === startFen ? (theme === 'emerald' ? 'bg-emerald-800 border-emerald-600 text-white' : 'bg-blue-800 border-blue-600 text-white') : (theme === 'emerald' ? 'bg-emerald-950 border-emerald-900 text-emerald-400' : 'bg-blue-950 border-blue-900 text-blue-400')}`}>Start</button>
+      {moves.map((m: any, i: number) => (
+        <button key={i} onClick={() => setBoardFen(m.fen)} className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${boardFen === m.fen ? (theme === 'emerald' ? 'bg-emerald-800 border-emerald-600 text-white' : 'bg-blue-800 border-blue-600 text-white') : (theme === 'emerald' ? 'bg-emerald-950 border-emerald-900 text-emerald-400' : 'bg-blue-950 border-blue-900 text-blue-400')}`}>{m.san}</button>
+      ))}
+    </div>
+  );
+
+const CorrectStatus = ({ bestLineMoves, boardFen, setBoardFen, startFen }: any) => (
+  <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-450 rounded text-sm font-semibold text-center shadow-lg flex flex-col gap-1.5">
+    <div>✨ CORRECT! You found the best move.</div>
+    <BestLineViewer moves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={startFen} theme="emerald" />
+  </div>
+);
+
+const SolvedStatus = ({ solution, bestLineMoves, boardFen, setBoardFen, startFen }: any) => (
+  <div className="p-3 bg-blue-950/60 border border-blue-800 text-blue-400 rounded text-sm font-semibold text-center shadow-lg flex flex-col gap-1.5">
+    <div>💡 Solution: {solution}</div>
+    <BestLineViewer moves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={startFen} theme="blue" />
+  </div>
+);
+
+const GameStatusCard = ({ status, solution, bestLineMoves, boardFen, setBoardFen, startFen }: any) => {
+  if (status === 'correct') return <CorrectStatus bestLineMoves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={startFen} />;
+  if (status === 'solved') return <SolvedStatus solution={solution} bestLineMoves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={startFen} />;
   if (status === 'incorrect') return <div className="p-3 bg-rose-950/60 border border-rose-800 text-rose-400 rounded text-sm font-semibold text-center shadow-lg">❌ INCORRECT! That is a mistake, try again.</div>;
-  if (status === 'solved') return <div className="p-3 bg-blue-950/60 border border-blue-800 text-blue-400 rounded text-sm font-semibold text-center shadow-lg">💡 Solution: {solution}</div>;
   return <div className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded text-sm text-center">Make your move on the board...</div>;
 };
 
@@ -130,7 +169,7 @@ const GamePuzzleControls = ({ status, isLast, onNext, onReveal, onExit }: any) =
   </div>
 );
 
-export function GamePuzzleArena({ mistakes, gameTitle, onExit }: { mistakes: any[]; gameTitle: string; onExit: () => void }) {
+export function GamePuzzleArena({ mistakes, gameTitle, playerColor, onExit }: { mistakes: any[]; gameTitle: string; playerColor: 'white' | 'black'; onExit: () => void }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'solved'>('playing');
   const activeMistake = mistakes[currentIndex];
@@ -142,6 +181,25 @@ export function GamePuzzleArena({ mistakes, gameTitle, onExit }: { mistakes: any
       setStatus('playing');
     }
   }, [currentIndex, activeMistake]);
+
+  useEffect(() => {
+    if (status !== 'correct' && status !== 'solved') return;
+    const moves = getBestLineMoves(activeMistake);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      const idx = moves.findIndex((m) => m.fen === boardFen), isR = e.key === 'ArrowRight';
+      if (isR && idx < moves.length - 1) {
+        setBoardFen(moves[idx + 1].fen); playMoveSound(moves[idx + 1].san.includes('x'));
+      } else if (!isR) {
+        setBoardFen(idx > 0 ? moves[idx - 1].fen : activeMistake.startFen); playMoveSound(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [status, activeMistake, boardFen]);
+
+
 
   const onReveal = useCallback(() => {
     if (!activeMistake) return;
@@ -159,7 +217,7 @@ export function GamePuzzleArena({ mistakes, gameTitle, onExit }: { mistakes: any
     const promo = getPromoPiece(piece.pieceType, targetSquare);
     if (!isLegalMove(boardFen, sourceSquare, targetSquare, promo)) return false;
     const uci = sourceSquare + targetSquare + (promo || '');
-    const ok = uci === activeMistake.solutionUci;
+    const ok = uci === activeMistake.solutionUci || (activeMistake.solutionUcis && activeMistake.solutionUcis.includes(uci));
     if (ok) {
       const chess = new Chess(boardFen);
       try {
@@ -199,14 +257,14 @@ export function GamePuzzleArena({ mistakes, gameTitle, onExit }: { mistakes: any
     <div className="flex flex-1 overflow-hidden">
       <div className="flex-1 flex items-center justify-center p-6 bg-zinc-950 relative">
         <div className="relative aspect-square shadow-2xl rounded-lg overflow-hidden border border-zinc-800/40" style={{ width: 'min(calc(100vh - 120px), calc(100vw - 440px))' }}>
-          <ChessboardProvider options={{ position: boardFen, boardOrientation: activeMistake.player_color === 'w' ? 'white' : 'black', onPieceDrop, squareRenderer }}>
+          <ChessboardProvider options={{ position: boardFen, boardOrientation: playerColor, onPieceDrop, squareRenderer }}>
             <Chessboard />
           </ChessboardProvider>
           {activeMistake.playedUci && (
             <BlunderArrow
               from={activeMistake.playedUci.slice(0, 2)}
               to={activeMistake.playedUci.slice(2, 4)}
-              orientation={activeMistake.player_color === 'w' ? 'white' : 'black'}
+              orientation={playerColor}
             />
           )}
         </div>
@@ -215,7 +273,7 @@ export function GamePuzzleArena({ mistakes, gameTitle, onExit }: { mistakes: any
         <div>
           <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2 mb-6">🧩 Game Puzzles</h2>
           <GamePuzzlePrompt mistake={activeMistake} gameTitle={gameTitle} index={currentIndex} total={mistakes.length} evaluation={activeMistake.evaluation} />
-          <GameStatusCard status={status} solution={activeMistake.solutionSan} />
+          <GameStatusCard status={status} solution={activeMistake.solutionSan} bestLineMoves={getBestLineMoves(activeMistake)} boardFen={boardFen} setBoardFen={setBoardFen} startFen={activeMistake.startFen} />
         </div>
         <GamePuzzleControls status={status} isLast={isLast} onNext={onNext} onReveal={onReveal} onExit={onExit} />
       </div>
