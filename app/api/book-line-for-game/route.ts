@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Chess } from 'chess.js';
 import { turso } from '../../services/turso';
+import { preprocessPgn } from '../../services/pgn';
+
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -22,7 +24,7 @@ export async function GET(req: NextRequest) {
     const pgn = String(gameRs.rows[0].pgn);
 
     const chess = new Chess();
-    chess.loadPgn(pgn.trim());
+    chess.loadPgn(preprocessPgn(pgn).trim());
     const history = chess.history({ verbose: true });
     
     const fens = [chess.header().FEN || chess.header().Fen || STARTING_FEN];

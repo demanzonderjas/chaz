@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Chess } from 'chess.js';
 import { turso } from '../../services/turso';
+import { preprocessPgn, isUserBlack } from '../../services/pgn';
+
 
 interface GameMeta {
   white: string;
@@ -86,7 +88,7 @@ async function fetchEvaluationForFen(fen: string) {
 
 function getGameFensUpTo(pgn: string, targetFen: string): string[] {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const fens = [chess.header().FEN || chess.header().Fen || STARTING_FEN];
   const temp = new Chess(fens[0]);
   for (const m of chess.history({ verbose: true })) {
@@ -183,12 +185,12 @@ async function fetchBookPuzzle(openingId?: number, color?: string) {
 
   for (const game of gamesRs.rows) {
     const pgn = String(game.pgn);
-    const black = String(game.black_name || '').toLowerCase();
-    const uColor = (game.user_color as string) || (black.includes('demanzonderjas') ? 'b' : 'w');
+    const black = String(game.black_name || '');
+    const uColor = (game.user_color as string) || (isUserBlack(black) ? 'b' : 'w');
 
     const chess = new Chess();
     try {
-      chess.loadPgn(pgn.trim());
+      chess.loadPgn(preprocessPgn(pgn).trim());
     } catch {
       continue;
     }
@@ -343,7 +345,7 @@ async function fetchBookPuzzle(openingId?: number, color?: string) {
 function getGamePlyForFen(pgn: string, targetFen3: string): number {
   const chess = new Chess();
   try {
-    chess.loadPgn(pgn.trim());
+    chess.loadPgn(preprocessPgn(pgn).trim());
     const history = chess.history({ verbose: true });
     const startFen = chess.header().FEN || chess.header().Fen || STARTING_FEN;
     const temp = new Chess(startFen);
@@ -588,7 +590,7 @@ async function fetchCachedEvalsForFens(normFens: string[]) {
 
 function getGameFensAndHistory(pgn: string) {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const history = chess.history({ verbose: true });
   const fens = [chess.header().FEN || chess.header().Fen || STARTING_FEN];
   const temp = new Chess(fens[0]);
@@ -793,8 +795,8 @@ async function scanGame(gameId: number) {
   if (!game) return 0;
   const { history, fens } = getGameFensAndHistory(game.pgn as string);
   const normFens = fens.map(normalizeFen), evalMap = await fetchCachedEvalsForFens(normFens);
-  const black = String(game.black_name || '').toLowerCase();
-  const uColor = (game.user_color as string) || (black.includes('demanzonderjas') ? 'b' : 'w');
+  const black = String(game.black_name || '');
+  const uColor = (game.user_color as string) || (isUserBlack(black) ? 'b' : 'w');
   const results = await Promise.all(history.map((_, i) => processMoveIndex(game, history, fens, normFens, evalMap, i, uColor)));
   return results.filter(Boolean).length;
 }

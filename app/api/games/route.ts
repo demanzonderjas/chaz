@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Chess } from 'chess.js';
 import { createHash } from 'crypto';
 import { turso } from '../../services/turso';
+import { preprocessPgn, isUserBlack } from '../../services/pgn';
+
 
 interface HistoryEntry {
   fen: string;
@@ -67,13 +69,13 @@ function parseHeaders(headers: Record<string, string | null | undefined>) {
   const black = headers['Black'] || 'Unknown';
   const result = headers['Result'] || '*';
   const playedDate = headers['Date'] || 'Unknown';
-  const userColor = black.toLowerCase().includes('demanzonderjas') ? 'b' : 'w';
+  const userColor = isUserBlack(black) ? 'b' : 'w';
   return { white, black, result, playedDate, userColor };
 }
 
 function parseGameDetails(pgn: string) {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const details = parseHeaders(chess.header());
   return { ...details, moveCount: chess.history().length };
 }
@@ -110,7 +112,7 @@ async function processMove(m: any, tempChess: Chess, outcome: string, gameId: nu
 
 async function indexGameMoves(gameId: number, pgn: string, result: string, userColor: string) {
   const chess = new Chess();
-  chess.loadPgn(pgn.trim());
+  chess.loadPgn(preprocessPgn(pgn).trim());
   const history = chess.history({ verbose: true });
   const startFen = chess.header().FEN || chess.header().Fen;
   const tempChess = startFen ? new Chess(startFen) : new Chess();
