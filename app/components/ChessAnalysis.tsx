@@ -95,9 +95,9 @@ export function ChessAnalysis() {
   const { moves: bookMoves, inBook } = useBookMoves(boardFen);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || analyzing) return;
     analyse(boardFen, boardColor, 16);
-  }, [ready, boardFen, boardColor, analyse]);
+  }, [ready, boardFen, boardColor, analyse, analyzing]);
 
   // Keyboard navigation
   useEffect(() => {
