@@ -51,6 +51,7 @@ class StockfishScheduler {
   private onProgressCallback: ((completed: number, total: number) => void) | null = null;
   private onFinishedCallback: (() => void) | null = null;
   private totalAnnotationTasks = 0;
+  private localCache: Record<string, { cached: boolean; result: any }> = {};
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -283,10 +284,43 @@ class StockfishScheduler {
     this.onProgressCallback(completed, this.totalAnnotationTasks);
   }
 
-  public addAnnotationTasks(tasks: AnnotationTask[]) {
+  private async batchCheckCache(fens: string[], depth: number): Promise<Record<string, { cached: boolean; result: any }>> {
+    if (fens.length === 0) return {};
+    try {
+      const body = JSON.stringify({ fens, depth });
+      const res = await fetch('/api/analysis/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body
+      });
+      const data = res.ok ? await res.json() : null;
+      return data?.results || {};
+    } catch {
+      return {};
+    }
+  }
+
+  public async addAnnotationTasks(tasks: AnnotationTask[]) {
     this.stopCurrentSearch();
     this.annotationQueue = [...tasks];
     this.totalAnnotationTasks = tasks.length;
+
+    if (tasks.length > 0) {
+      this.checkingCache = true;
+      try {
+        const fens = tasks.map((t) => t.fen);
+        const depth = tasks[0]?.depth || 14;
+        this.localCache = await this.batchCheckCache(fens, depth);
+      } catch (e) {
+        console.error('Failed to batch check cache', e);
+        this.localCache = {};
+      } finally {
+        this.checkingCache = false;
+      }
+    } else {
+      this.localCache = {};
+    }
+
     this.runNext();
   }
 
@@ -314,6 +348,10 @@ class StockfishScheduler {
   }
 
   private async checkCache(fen: string, depth: number, color: 'w' | 'b'): Promise<EvalResult | null> {
+    const cached = this.localCache[fen];
+    if (cached) {
+      return cached.cached ? this.mapCachedResult(cached.result, color) : null;
+    }
     try {
       const res = await fetch(`/api/analysis?fen=${encodeURIComponent(fen)}&depth=${depth}`);
       const data = res.ok ? await res.json() : null;

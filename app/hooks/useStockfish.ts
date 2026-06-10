@@ -19,7 +19,10 @@ const useThrottledValue = <T>(initial: T, interval = 150) => {
     const t = setInterval(() => { if (ref.current !== val) setVal(ref.current); }, interval);
     return () => clearInterval(t);
   }, [val, interval]);
-  return [val, (next: T) => { ref.current = next; }] as const;
+  const setValThrottled = useCallback((next: T) => {
+    ref.current = next;
+  }, []);
+  return [val, setValThrottled] as const;
 };
 
 export function useStockfish() {
