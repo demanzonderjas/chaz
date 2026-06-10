@@ -755,6 +755,35 @@ function detectZwischenzug(
   return null;
 }
 
+function isEndgameFen(fen: string): boolean {
+  const board = fen.split(' ')[0];
+  const pieces = board.match(/[qrbnQRBN]/g);
+  return !pieces || pieces.length <= 4;
+}
+
+function getSideToMoveScore(ev: any): number {
+  if (ev.mate !== undefined && ev.mate !== null) {
+    return ev.mate > 0 ? 10000 : -10000;
+  }
+  return ev.cp ?? ev.score ?? 0;
+}
+
+function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): string {
+  if (isEndgameFen(fen)) return 'endgame';
+  const score = getSideToMoveScore(ev);
+  if (score >= 200) return 'winning_position';
+  if (ply <= 20 && !isOpp && score >= -150) return 'opening';
+  return score >= -350 && score <= -100 ? 'defensive' : 'tactical';
+}
+
+function getPuzzleDescription(type: string, isOpp: boolean, san: string): string {
+  if (type === 'endgame') return isOpp ? `Opponent blundered. Find the winning endgame technique!` : `Endgame challenge: Find the best move to convert this endgame!`;
+  if (type === 'winning_position') return isOpp ? `Opponent blundered. Find the clinical winning sequence!` : `You had a winning position. Find the correct winning move!`;
+  if (type === 'opening') return `Opening challenge: Find the correct move to get a playable game out of the opening!`;
+  if (type === 'defensive') return isOpp ? `Opponent threatened you. Find the precise defensive response to hold the game!` : `You were under pressure. Find the precise saving move!`;
+  return isOpp ? `Opponent played ${san}. Find the winning response!` : `You played ${san} in the game. Find the correct move instead!`;
+}
+
 async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string) {
   const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]];
   if (!eb || !ea) return false;
@@ -764,30 +793,30 @@ async function processMoveIndex(game: any, history: any[], fens: string[], normF
 
   const moveColor = isWhite ? 'w' : 'b';
   const isOpponent = moveColor !== uUserColor;
-
   const startFen = isOpponent ? fens[i + 1] : fens[i];
   const evalAtStart = isOpponent ? ea : eb;
   const bestUci = isOpponent ? ea.bestMove : eb.bestMove;
+  if (!bestUci) return false;
+
   const prevMove = isOpponent ? history[i] : (i > 0 ? history[i - 1] : null);
-
-  if (bestUci) {
-    const zw = detectZwischenzug(startFen, bestUci, evalAtStart, prevMove);
-    if (zw) {
-      const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
-      const desc = zw.isCapture
-        ? `Opponent captured on ${prevMove.to}. Find the intermediate move (zwischenzug) instead of recapturing!`
-        : `Opponent threatened your ${zw.threatenedPieceType === 'p' ? 'pawn' : zw.threatenedPieceType === 'q' ? 'queen' : zw.threatenedPieceType === 'r' ? 'rook' : zw.threatenedPieceType === 'b' ? 'bishop' : 'knight'}. Find the intermediate move (zwischenzug) instead of directly defending!`;
-      
-      const blunderUci = zw.naturalUci;
-      const blunderSan = zw.naturalSan;
-
-      const row = [game.id, startFen, bestUci, zw.solution_san, uUserColor, desc, blunderUci, blunderSan, gameTitle];
-      return await insertPuzzle(row, 'zwischenzug');
-    }
+  const zw = detectZwischenzug(startFen, bestUci, evalAtStart, prevMove);
+  if (zw) {
+    const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
+    const desc = zw.isCapture
+      ? `Opponent captured on ${prevMove.to}. Find the intermediate move (zwischenzug) instead of recapturing!`
+      : `Opponent threatened your ${zw.threatenedPieceType === 'p' ? 'pawn' : zw.threatenedPieceType === 'q' ? 'queen' : zw.threatenedPieceType === 'r' ? 'rook' : zw.threatenedPieceType === 'b' ? 'bishop' : 'knight'}. Find the intermediate move (zwischenzug) instead of directly defending!`;
+    const row = [game.id, startFen, bestUci, zw.solution_san, uUserColor, desc, zw.naturalUci, zw.naturalSan, gameTitle];
+    return await insertPuzzle(row, 'zwischenzug');
   }
 
-  const row = buildPuzzleRow(game, { evalBefore: eb, evalAfter: ea }, history, fens, i, uUserColor, isWhite);
-  return row ? await insertPuzzle(row, 'tactical') : false;
+  const blunderUci = history[i].from + history[i].to + (history[i].promotion || '');
+  const blunderSan = history[i].san;
+  const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
+
+  const puzzleType = getPuzzleType(startFen, i, isOpponent, evalAtStart);
+  const desc = getPuzzleDescription(puzzleType, isOpponent, blunderSan);
+  const row = [game.id, startFen, bestUci, getSan(startFen, bestUci), uUserColor, desc, blunderUci, blunderSan, gameTitle];
+  return await insertPuzzle(row, puzzleType);
 }
 
 async function scanGame(gameId: number) {

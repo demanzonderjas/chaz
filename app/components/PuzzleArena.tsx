@@ -331,8 +331,21 @@ const BlunderBadge = () => (
   </div>
 );
 
+type PuzzleType = 'tactical' | 'zwischenzug' | 'book' | 'weakness' | 'opening' | 'winning_position' | 'endgame' | 'defensive';
+
+const PUZZLE_TYPES = [
+  { id: 'tactical', label: 'Tactical' },
+  { id: 'zwischenzug', label: 'Zwischenzug' },
+  { id: 'book', label: 'Book' },
+  { id: 'weakness', label: 'Weakness' },
+  { id: 'opening', label: 'Opening' },
+  { id: 'winning_position', label: 'Winning' },
+  { id: 'endgame', label: 'Endgame' },
+  { id: 'defensive', label: 'Defensive' },
+] as const;
+
 export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoadGame?: (pgn: string, startFen: string, gameId: number) => void }) {
-  const [puzzleType, setPuzzleType] = useState<'tactical' | 'book' | 'zwischenzug' | 'weakness'>('tactical');
+  const [puzzleType, setPuzzleType] = useState<PuzzleType>('tactical');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [bookLine, setBookLine] = useState<string | null>(null);
@@ -465,16 +478,11 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     return () => window.removeEventListener('keydown', onKey);
   }, [status, puzzleType, puzzle, activeLineIdx, activeMoveIdx, activeLine, setBoardFen]);
 
-  const handleTypeChange = (type: 'tactical' | 'book' | 'zwischenzug' | 'weakness') => {
+  const handleTypeChange = (type: PuzzleType) => {
     setPuzzleType(type);
-    setPuzzle(null);
-    setEvaluation(null);
-    setBookLine(null);
-    setBoardFen(STARTING_FEN);
-    setActiveLineIdx(0);
-    setHint(null);
-    setHasMadeMistake(false);
-    setAttemptReported(false);
+    setPuzzle(null); setEvaluation(null); setBookLine(null);
+    setBoardFen(STARTING_FEN); setActiveLineIdx(0);
+    setHint(null); setHasMadeMistake(false); setAttemptReported(false);
   };
 
   const onReveal = useCallback(() => {
@@ -576,31 +584,18 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         <div>
           <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2 mb-6">🧩 Personal Puzzles</h2>
           
-          <div className="grid grid-cols-4 bg-zinc-900 p-0.5 rounded-lg mb-6 border border-zinc-850">
-            <button 
-              onClick={() => handleTypeChange('tactical')}
-              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'tactical' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
-            >
-              Tactical
-            </button>
-            <button 
-              onClick={() => handleTypeChange('zwischenzug')}
-              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'zwischenzug' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
-            >
-              Zwischenzug
-            </button>
-            <button 
-              onClick={() => handleTypeChange('book')}
-              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'book' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
-            >
-              Book
-            </button>
-            <button 
-              onClick={() => handleTypeChange('weakness')}
-              className={`py-1.5 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${puzzleType === 'weakness' ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
-            >
-              Weakness
-            </button>
+          <div className="grid grid-cols-4 bg-zinc-900 p-0.5 rounded-lg mb-6 border border-zinc-850 gap-0.5">
+            {PUZZLE_TYPES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => handleTypeChange(t.id)}
+                className={`py-1.5 text-[10px] font-semibold rounded-md transition-all cursor-pointer truncate ${
+                  puzzleType === t.id ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
 
           <div className="mb-6">
