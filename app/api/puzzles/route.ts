@@ -650,13 +650,13 @@ function getGameFensAndHistory(pgn: string) {
   return { history, fens };
 }
 
-function detectBlunderDetails(evalBefore: any, evalAfter: any, isWhiteToMove: boolean) {
+function detectBlunderDetails(evalBefore: any, evalAfter: any, isWhiteToMove: boolean, ply?: number) {
   const scoreBefore = isWhiteToMove ? evalBefore.cp : -evalBefore.cp;
   const scoreAfter = isWhiteToMove ? evalAfter.cp : -evalAfter.cp;
   if (scoreBefore === undefined || scoreAfter === undefined) return null;
-  const wpBefore = getWinProbability(scoreBefore);
-  const wpAfter = getWinProbability(-scoreAfter);
-  return wpBefore - wpAfter >= 0.20 ? { scoreBefore, scoreAfter } : null;
+  const wpBefore = getWinProbability(scoreBefore), wpAfter = getWinProbability(-scoreAfter);
+  const threshold = (ply !== undefined && ply <= 24) ? 0.10 : 0.20;
+  return wpBefore - wpAfter >= threshold ? { scoreBefore, scoreAfter } : null;
 }
 
 function buildPuzzleRow(game: any, p: any, history: any[], fens: string[], i: number, uUserColor: string, isWhite: boolean) {
@@ -821,7 +821,7 @@ function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): strin
   if (isEndgameFen(fen)) return 'endgame';
   const score = getSideToMoveScore(ev);
   if (score >= 200) return 'winning_position';
-  if (ply <= 20 && !isOpp && score >= -150) return 'opening';
+  if (ply <= 24 && !isOpp && score >= -150) return 'opening';
   return score >= -350 && score <= -100 ? 'defensive' : 'tactical';
 }
 
@@ -833,8 +833,8 @@ function getPuzzleDescription(type: string, isOpp: boolean, san: string): string
   return isOpp ? `Opponent played ${san}. Find the winning response!` : `You played ${san} in the game. Find the correct move instead!`;
 }
 
-function isBlunder(eb: any, ea: any, isWhite: boolean): boolean {
-  return eb && ea && !!detectBlunderDetails(eb, ea, isWhite);
+function isBlunder(eb: any, ea: any, isWhite: boolean, ply?: number): boolean {
+  return eb && ea && !!detectBlunderDetails(eb, ea, isWhite, ply);
 }
 
 async function handleZw(game: any, startFen: string, bestUci: string, evalAtStart: any, prevMove: any, uUserColor: string) {
@@ -857,7 +857,7 @@ async function handleStd(game: any, startFen: string, bestUci: string, i: number
 
 async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string) {
   const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]], isWhite = normFens[i].split(' ')[1] === 'w';
-  if (!isBlunder(eb, ea, isWhite)) return false;
+  if (!isBlunder(eb, ea, isWhite, i)) return false;
   const isOpp = (isWhite ? 'w' : 'b') !== uUserColor, start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
   if (!bestUci) return false;
   const zw = await handleZw(game, start, bestUci, isOpp ? ea : eb, isOpp ? history[i] : (history[i - 1] || null), uUserColor);

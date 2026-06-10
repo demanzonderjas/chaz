@@ -44,7 +44,7 @@ function getPuzzleType(fen, ply, isOpp, ev) {
   if (isEndgameFen(fen)) return 'endgame';
   const score = getSideToMoveScore(ev);
   if (score >= 200) return 'winning_position';
-  if (ply <= 20 && !isOpp && score >= -150) return 'opening';
+  if (ply <= 24 && !isOpp && score >= -150) return 'opening';
   return score >= -350 && score <= -100 ? 'defensive' : 'tactical';
 }
 
@@ -66,13 +66,14 @@ function getSan(fen, uci) {
   }
 }
 
-function detectBlunderDetails(evalBefore, evalAfter, isWhiteToMove) {
+function detectBlunderDetails(evalBefore, evalAfter, isWhiteToMove, ply) {
   const scoreBefore = isWhiteToMove ? evalBefore.cp : -evalBefore.cp;
   const scoreAfter = isWhiteToMove ? evalAfter.cp : -evalAfter.cp;
   if (scoreBefore === undefined || scoreAfter === undefined) return null;
   const wpBefore = getWinProbability(scoreBefore);
   const wpAfter = getWinProbability(-scoreAfter);
-  return wpBefore - wpAfter >= 0.20 ? { scoreBefore, scoreAfter } : null;
+  const threshold = (ply !== undefined && ply <= 24) ? 0.10 : 0.20;
+  return wpBefore - wpAfter >= threshold ? { scoreBefore, scoreAfter } : null;
 }
 
 function detectZwischenzug(startFen, bestUci, evalAtStart, prevMove) {
@@ -219,7 +220,7 @@ async function run() {
       if (!eb || !ea) continue;
 
       const isWhite = normFens[i].split(' ')[1] === 'w';
-      const p = detectBlunderDetails(eb, ea, isWhite);
+      const p = detectBlunderDetails(eb, ea, isWhite, i);
       if (!p) continue;
 
       const moveColor = isWhite ? 'w' : 'b';

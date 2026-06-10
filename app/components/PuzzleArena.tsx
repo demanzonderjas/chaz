@@ -277,6 +277,7 @@ function getDiffText(puzzle: any, bestScore: number, blunderScore: number | null
 function getExplanationTitle(type: string): string {
   if (type === 'defensive') return 'Defensive Analysis';
   if (type === 'endgame') return 'Endgame Analysis';
+  if (type === 'opening') return 'Opening Analysis';
   return 'Conversion Analysis';
 }
 
@@ -695,7 +696,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
               {(status === 'correct' || status === 'solved') && puzzleType === 'zwischenzug' && (
                 <ZwischenzugExplanation evaluation={evaluation} puzzle={puzzle} />
               )}
-              {(status === 'correct' || status === 'solved') && (puzzleType === 'winning_position' || puzzleType === 'defensive' || puzzleType === 'endgame') && (
+              {(status === 'correct' || status === 'solved') && (puzzleType === 'winning_position' || puzzleType === 'defensive' || puzzleType === 'endgame' || puzzleType === 'opening') && (
                 <BlunderDiffExplanation evaluation={evaluation} blunderEvaluation={blunderEvaluation} puzzle={puzzle} type={puzzleType} />
               )}
               {(status === 'correct' || status === 'solved') && (
