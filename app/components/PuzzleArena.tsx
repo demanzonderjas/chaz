@@ -274,13 +274,19 @@ function getDiffText(puzzle: any, bestScore: number, blunderScore: number | null
   return `Instead of playing ${puzzle.blunder_san} (${blunderLabel}), the best move was ${puzzle.solution_san} (${bestLabel}).` + (diff ? ` This dropped the evaluation by ${diff}.` : '');
 }
 
-const WinningExplanation = ({ evaluation, blunderEvaluation, puzzle }: { evaluation: any; blunderEvaluation: any; puzzle: any }) => {
+function getExplanationTitle(type: string): string {
+  if (type === 'defensive') return 'Defensive Analysis';
+  if (type === 'endgame') return 'Endgame Analysis';
+  return 'Conversion Analysis';
+}
+
+const BlunderDiffExplanation = ({ evaluation, blunderEvaluation, puzzle, type }: { evaluation: any; blunderEvaluation: any; puzzle: any; type: string }) => {
   const bestScore = getScore(evaluation);
   const blunderVal = blunderEvaluation ? getScore(blunderEvaluation) : null;
   const blunderScore = blunderVal !== null ? -blunderVal : null;
   if (bestScore === null || !puzzle) return null;
   return <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2 font-sans">
-    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Conversion Analysis</div>
+    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">{getExplanationTitle(type)}</div>
     <div className="text-xs text-zinc-300 leading-relaxed">{getDiffText(puzzle, bestScore, blunderScore)}</div>
   </div>;
 };
@@ -689,8 +695,8 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
               {(status === 'correct' || status === 'solved') && puzzleType === 'zwischenzug' && (
                 <ZwischenzugExplanation evaluation={evaluation} puzzle={puzzle} />
               )}
-              {(status === 'correct' || status === 'solved') && puzzleType === 'winning_position' && (
-                <WinningExplanation evaluation={evaluation} blunderEvaluation={blunderEvaluation} puzzle={puzzle} />
+              {(status === 'correct' || status === 'solved') && (puzzleType === 'winning_position' || puzzleType === 'defensive' || puzzleType === 'endgame') && (
+                <BlunderDiffExplanation evaluation={evaluation} blunderEvaluation={blunderEvaluation} puzzle={puzzle} type={puzzleType} />
               )}
               {(status === 'correct' || status === 'solved') && (
                 puzzleType === 'book' ? (
