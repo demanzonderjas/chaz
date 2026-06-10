@@ -855,15 +855,25 @@ async function handleStd(game: any, startFen: string, bestUci: string, i: number
   return await insertPuzzle(row, puzzleType);
 }
 
-async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string) {
+async function fetchBookMovesForFens(fens: string[]): Promise<Set<string>> {
+  const bookFens = fens.map(normalizeBookFen);
+  const placeholders = bookFens.map(() => '?').join(',');
+  const sql = `SELECT fen_before, uci FROM book_moves WHERE fen_before IN (${placeholders})`;
+  const rs = await turso.execute({ sql, args: bookFens });
+  const set = new Set<string>();
+  rs.rows.forEach(r => set.add(`${String(r.fen_before)}|${String(r.uci)}`));
+  return set;
+}
+
+async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string, bookMoves: Set<string>) {
   const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]], isWhite = normFens[i].split(' ')[1] === 'w';
   if (!isBlunder(eb, ea, isWhite, i)) return false;
   const isOpp = (isWhite ? 'w' : 'b') !== uUserColor, start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
   if (!bestUci) return false;
-  const zw = await handleZw(game, start, bestUci, isOpp ? ea : eb, isOpp ? history[i] : (history[i - 1] || null), uUserColor);
-  if (zw !== null) return zw;
   const blunder = history[i].from + history[i].to + (history[i].promotion || '');
-  return await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, blunder, history[i].san, uUserColor);
+  if (bookMoves.has(`${normalizeBookFen(fens[i])}|${blunder}`)) return false;
+  const zw = await handleZw(game, start, bestUci, isOpp ? ea : eb, isOpp ? history[i] : (history[i - 1] || null), uUserColor);
+  return zw !== null ? zw : await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, blunder, history[i].san, uUserColor);
 }
 
 async function scanGame(gameId: number) {
@@ -871,9 +881,9 @@ async function scanGame(gameId: number) {
   if (!game) return 0;
   const { history, fens } = getGameFensAndHistory(game.pgn as string);
   const normFens = fens.map(normalizeFen), evalMap = await fetchCachedEvalsForFens(normFens);
-  const black = String(game.black_name || '');
-  const uColor = (game.user_color as string) || (isUserBlack(black) ? 'b' : 'w');
-  const results = await Promise.all(history.map((_, i) => processMoveIndex(game, history, fens, normFens, evalMap, i, uColor)));
+  const bookMoves = await fetchBookMovesForFens(fens);
+  const uColor = (game.user_color as string) || (isUserBlack(String(game.black_name || '')) ? 'b' : 'w');
+  const results = await Promise.all(history.map((_, i) => processMoveIndex(game, history, fens, normFens, evalMap, i, uColor, bookMoves)));
   return results.filter(Boolean).length;
 }
 

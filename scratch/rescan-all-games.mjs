@@ -14,6 +14,11 @@ function normalizeFen(fen) {
   return fen.split(' ').slice(0, 4).join(' ');
 }
 
+function normalizeBookFen(fen) {
+  const p = fen.split(' ');
+  return `${p[0]} ${p[1]} ${p[2]} -`;
+}
+
 function getWinProbability(cp) {
   return 1 / (1 + Math.pow(10, -cp / 400));
 }
@@ -215,6 +220,16 @@ async function run() {
     const evalMap = {};
     rs.rows.forEach(r => { evalMap[String(r.fen_norm)] = JSON.parse(r.result_json); });
 
+    // Fetch book moves for these fens
+    const bookFens = fens.map(normalizeBookFen);
+    const bmPlaceholders = bookFens.map(() => '?').join(',');
+    const bmRs = await client.execute({
+      sql: `SELECT fen_before, uci FROM book_moves WHERE fen_before IN (${bmPlaceholders})`,
+      args: bookFens
+    });
+    const bookMoves = new Set();
+    bmRs.rows.forEach(r => bookMoves.add(`${r.fen_before}|${r.uci}`));
+
     for (let i = 0; i < history.length; i++) {
       const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]];
       if (!eb || !ea) continue;
@@ -246,6 +261,7 @@ async function run() {
       }
 
       const blunderUci = history[i].from + history[i].to + (history[i].promotion || '');
+      if (bookMoves.has(`${normalizeBookFen(fens[i])}|${blunderUci}`)) continue;
       const blunderSan = history[i].san;
       const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
 
