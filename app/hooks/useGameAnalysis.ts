@@ -8,6 +8,7 @@ export type MoveAnnotation = {
   cpLoss?: number;
   score?: number;
   isMissedBook?: boolean;
+  isCheckmate?: boolean;
 };
 
 export const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -95,9 +96,10 @@ const registerSchedulerCallbacks = (ctx: AnalysisContext) => {
 const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN) => {
   const positions = history.map((h, i) => ({ fen: i === 0 ? startFen : history[i - 1].fen, san: h.san }));
   const data = await fetchBookData(positions);
-  ctx.setAnnotations(history.map((_, i) => ({
+  ctx.setAnnotations(history.map((h, i) => ({
     types: data.book.has(i) ? (['book'] as AnnotationType[]) : [],
     isMissedBook: !data.book.has(i) && data.options.has(i),
+    isCheckmate: h.san.endsWith('#'),
   })));
 };
 
@@ -138,7 +140,11 @@ export const analyzeLastMoveImpl = async (ctx: AnalysisContext, history: History
   if (!history.length) return;
   const i = history.length - 1, before = i === 0 ? startFen : history[i - 1].fen;
   const data = await fetchBookData([{ fen: before, san: history[i].san }]);
-  const entry = { types: data.book.has(0) ? ['book'] : [], isMissedBook: !data.book.has(0) && data.options.has(0) };
+  const entry = {
+    types: data.book.has(0) ? ['book'] : [],
+    isMissedBook: !data.book.has(0) && data.options.has(0),
+    isCheckmate: history[i].san.endsWith('#'),
+  };
   ctx.setAnnotations((prev) => Object.assign([...prev], { [i]: entry }));
   queueMoveEvaluation(ctx, i, before, history[i].fen);
 };

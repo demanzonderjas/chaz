@@ -64,7 +64,7 @@ interface Puzzle {
 
 function getEvalLabel(ev: any): string {
   if (!ev) return '';
-  if (ev.mate !== undefined && ev.mate !== null) return `M${Math.abs(ev.mate)}`;
+  if (ev.mate !== undefined && ev.mate !== null) return ev.mate === 0 ? '#' : `M${Math.abs(ev.mate)}`;
   const cpVal = ev.cp ?? ev.score;
   if (cpVal === undefined || cpVal === null) return '';
   const val = cpVal / 100;
@@ -103,7 +103,7 @@ function getSan(fen: string, uci: string): string {
 
 const CandidateItem = ({ line, startFen, idx }: any) => {
   const cpVal = line.score ?? line.cp ?? 0;
-  const score = line.mate !== null && line.mate !== undefined ? `M${Math.abs(line.mate)}` : `${(cpVal / 100).toFixed(2)}`;
+  const score = line.mate !== null && line.mate !== undefined ? (line.mate === 0 ? '#' : `M${Math.abs(line.mate)}`) : `${(cpVal / 100).toFixed(2)}`;
   return (
     <div className="flex justify-between text-zinc-300 font-mono text-xs">
       <span>{idx + 1}. {getSan(startFen, line.pv[0])}</span>
@@ -236,7 +236,7 @@ const ZwischenzugExplanation = ({ evaluation, puzzle }: { evaluation: any; puzzl
   
   const getScoreLabel = (cand: any) => {
     if (!cand) return 'much worse';
-    if (cand.mate !== undefined && cand.mate !== null) return `M${Math.abs(cand.mate)}`;
+    if (cand.mate !== undefined && cand.mate !== null) return cand.mate === 0 ? '#' : `M${Math.abs(cand.mate)}`;
     const val = cand.cp ?? cand.score ?? 0;
     return `${(val / 100).toFixed(2)}`;
   };

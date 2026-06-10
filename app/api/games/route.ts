@@ -77,7 +77,7 @@ function parseGameDetails(pgn: string) {
   const chess = new Chess();
   chess.loadPgn(preprocessPgn(pgn).trim());
   const details = parseHeaders(chess.header());
-  return { ...details, moveCount: chess.history().length };
+  return { ...details, moveCount: Math.ceil(chess.history().length / 2) };
 }
 
 async function insertGame(pgn: string, hash: string, d: any) {

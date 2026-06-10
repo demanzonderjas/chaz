@@ -135,12 +135,17 @@ class StockfishScheduler {
     };
   }
 
+  private getMateScore(mateVal: number, color: 'w' | 'b'): number {
+    if (mateVal === 0) return color === 'w' ? -30000 : 30000;
+    const sign = color === 'w' ? 1 : -1;
+    return mateVal * sign > 0 ? 30000 : -30000;
+  }
+
   private parseAnnotationScore(line: string, color: 'w' | 'b'): number {
     const cpMatch = line.match(/score cp (-?\d+)/);
+    if (cpMatch) return parseInt(cpMatch[1]) * (color === 'w' ? 1 : -1);
     const mateMatch = line.match(/score mate (-?\d+)/);
-    const sign = color === 'w' ? 1 : -1;
-    if (cpMatch) return parseInt(cpMatch[1]) * sign;
-    if (mateMatch) return (parseInt(mateMatch[1]) * sign > 0 ? 30000 : -30000);
+    if (mateMatch) return this.getMateScore(parseInt(mateMatch[1]), color);
     return this.lastAnnotationScore;
   }
 

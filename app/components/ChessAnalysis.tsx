@@ -335,7 +335,7 @@ export function ChessAnalysis() {
 
   const evalLabel = () => {
     const { mate, score } = evaluation;
-    if (mate !== null) return `M${Math.abs(mate)}`;
+    if (mate !== null) return mate === 0 ? '#' : `M${Math.abs(mate)}`;
     if (score === null) return '0.00';
     const cp = score / 100;
     return (cp >= 0 ? '+' : '') + cp.toFixed(2);
@@ -471,7 +471,7 @@ export function ChessAnalysis() {
         <div className="flex flex-1 overflow-hidden">
         {/* Eval bar */}
         <div className="flex items-stretch px-2 py-2 shrink-0">
-          <EvalBar evaluation={evaluation} orientation={orientation} />
+          <EvalBar evaluation={evaluation} orientation={orientation} turn={boardColor} />
         </div>
 
         {/* Board */}
@@ -798,7 +798,7 @@ function pvToSan(startFen: string, pv: string[]): string[] {
 }
 
 function formatLineScore(line: any): string {
-  if (line.mate !== null) return `M${Math.abs(line.mate)}`;
+  if (line.mate !== null) return line.mate === 0 ? '#' : `M${Math.abs(line.mate)}`;
   if (line.score === null) return '0.00';
   const cp = line.score / 100;
   return (cp >= 0 ? '+' : '') + cp.toFixed(2);

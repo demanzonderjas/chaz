@@ -20,12 +20,11 @@ const getPointCoords = (index: number, score: number, total: number, width: numb
 };
 
 const getPoint = (ann: MoveAnnotation, i: number, total: number, width: number, height: number, lastY: number) => {
-  if (ann.score === undefined) {
+  if (ann.isCheckmate || ann.score === undefined) {
     const x = total > 1 ? ((i + 1) / total) * width : 0;
     return { x, y: lastY, index: i };
   }
-  const coords = getPointCoords(i + 1, ann.score, total + 1, width, height);
-  return { ...coords, index: i };
+  return { ...getPointCoords(i + 1, ann.score, total + 1, width, height), index: i };
 };
 
 const getPoints = (annotations: MoveAnnotation[], width: number, height: number) => {
@@ -44,7 +43,8 @@ const getPathD = (points: { x: number; y: number }[]) => {
   return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
 };
 
-const getAnnotationDetail = (types?: string[]) => {
+const getAnnotationDetail = (types?: string[], isCheckmate?: boolean) => {
+  if (isCheckmate) return { symbol: '#', bg: '#27272a' };
   if (!types || !types.length) return null;
   if (types.includes('blunder')) return { symbol: '??', bg: '#dc2626' };
   if (types.includes('mistake')) return { symbol: '?', bg: '#ea580c' };
@@ -54,7 +54,7 @@ const getAnnotationDetail = (types?: string[]) => {
 };
 
 const GraphDot = ({ p, activeIndex, ann, onSelect }: any) => {
-  const detail = getAnnotationDetail(ann?.types);
+  const detail = getAnnotationDetail(ann?.types, ann?.isCheckmate);
   if (!detail || p.index === activeIndex) return null;
   return (
     <g className="cursor-pointer" onClick={() => onSelect(p.index)}>

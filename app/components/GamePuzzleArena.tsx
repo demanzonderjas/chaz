@@ -52,7 +52,7 @@ const BlunderBadge = () => (
 
 function getEvalLabel(ev: any): string {
   if (!ev) return '';
-  if (ev.mate !== undefined && ev.mate !== null) return `M${Math.abs(ev.mate)}`;
+  if (ev.mate !== undefined && ev.mate !== null) return ev.mate === 0 ? '#' : `M${Math.abs(ev.mate)}`;
   const cpVal = ev.cp ?? ev.score;
   if (cpVal === undefined || cpVal === null) return '';
   const val = cpVal / 100;

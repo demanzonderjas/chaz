@@ -2,14 +2,14 @@
 
 import { EvalResult } from '../hooks/useStockfish';
 
-type Props = { evaluation: EvalResult; orientation: 'white' | 'black' };
+type Props = { evaluation: EvalResult; orientation: 'white' | 'black'; turn?: 'w' | 'b' };
 
-export function EvalBar({ evaluation, orientation }: Props) {
+export function EvalBar({ evaluation, orientation, turn }: Props) {
   const { score, mate } = evaluation;
 
   let whitePct = 50;
   if (mate !== null) {
-    whitePct = mate > 0 ? 98 : 2;
+    whitePct = mate === 0 ? (turn === 'w' ? 2 : 98) : (mate > 0 ? 98 : 2);
   } else if (score !== null) {
     const clamped = Math.max(-1000, Math.min(1000, score));
     whitePct = 50 + (clamped / 1000) * 48;
@@ -19,7 +19,7 @@ export function EvalBar({ evaluation, orientation }: Props) {
   const flipped = orientation === 'black';
 
   const label = () => {
-    if (mate !== null) return mate > 0 ? `M${mate}` : `M${Math.abs(mate)}`;
+    if (mate !== null) return mate === 0 ? '#' : (mate > 0 ? `M${mate}` : `M${Math.abs(mate)}`);
     if (score === null) return '0.00';
     const abs = Math.abs(score / 100);
     return (score >= 0 ? '+' : '-') + abs.toFixed(2);
