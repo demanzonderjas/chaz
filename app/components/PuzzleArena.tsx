@@ -254,6 +254,37 @@ const ZwischenzugExplanation = ({ evaluation, puzzle }: { evaluation: any; puzzl
   );
 };
 
+function getScore(ev: any): number | null {
+  if (!ev) return null;
+  const best = ev.candidates?.[0] ?? ev;
+  if (best.mate !== undefined && best.mate !== null) return best.mate > 0 ? 10000 : -10000;
+  return best.cp ?? best.score ?? 0;
+}
+
+function getScoreLabel(score: number | null): string {
+  if (score === null) return 'unknown';
+  if (Math.abs(score) >= 9000) return score > 0 ? 'Mate' : '-Mate';
+  return (score > 0 ? '+' : '') + (score / 100).toFixed(2);
+}
+
+function getDiffText(puzzle: any, bestScore: number, blunderScore: number | null): string {
+  const bestLabel = getScoreLabel(bestScore), blunderLabel = getScoreLabel(blunderScore);
+  const diff = blunderScore !== null && Math.abs(bestScore) < 9000 && Math.abs(blunderScore) < 9000
+    ? `${((bestScore - blunderScore) / 100).toFixed(2)} pawns` : null;
+  return `Instead of playing ${puzzle.blunder_san} (${blunderLabel}), the best move was ${puzzle.solution_san} (${bestLabel}).` + (diff ? ` This dropped the evaluation by ${diff}.` : '');
+}
+
+const WinningExplanation = ({ evaluation, blunderEvaluation, puzzle }: { evaluation: any; blunderEvaluation: any; puzzle: any }) => {
+  const bestScore = getScore(evaluation);
+  const blunderVal = blunderEvaluation ? getScore(blunderEvaluation) : null;
+  const blunderScore = blunderVal !== null ? -blunderVal : null;
+  if (bestScore === null || !puzzle) return null;
+  return <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2 font-sans">
+    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Conversion Analysis</div>
+    <div className="text-xs text-zinc-300 leading-relaxed">{getDiffText(puzzle, bestScore, blunderScore)}</div>
+  </div>;
+};
+
 const PuzzlePrompt = ({ 
   desc, 
   title, 
@@ -348,6 +379,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [puzzleType, setPuzzleType] = useState<PuzzleType>('tactical');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
+  const [blunderEvaluation, setBlunderEvaluation] = useState<any>(null);
   const [bookLine, setBookLine] = useState<string | null>(null);
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
   const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
@@ -414,6 +446,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         if (!active) return;
         setPuzzle(data.puzzle);
         setEvaluation(data.evaluation);
+        setBlunderEvaluation(data.blunderEvaluation || null);
         setBookLine(data.bookLine || null);
         setBoardFen(data.puzzle.start_fen);
         setStatus('playing');
@@ -484,7 +517,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
 
   const handleTypeChange = (type: PuzzleType) => {
     setPuzzleType(type);
-    setPuzzle(null); setEvaluation(null); setBookLine(null);
+    setPuzzle(null); setEvaluation(null); setBlunderEvaluation(null); setBookLine(null);
     setBoardFen(STARTING_FEN); setActiveLineIdx(0);
     setHint(null); setHasMadeMistake(false); setAttemptReported(false);
   };
@@ -655,6 +688,9 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
               )}
               {(status === 'correct' || status === 'solved') && puzzleType === 'zwischenzug' && (
                 <ZwischenzugExplanation evaluation={evaluation} puzzle={puzzle} />
+              )}
+              {(status === 'correct' || status === 'solved') && puzzleType === 'winning_position' && (
+                <WinningExplanation evaluation={evaluation} blunderEvaluation={blunderEvaluation} puzzle={puzzle} />
               )}
               {(status === 'correct' || status === 'solved') && (
                 puzzleType === 'book' ? (

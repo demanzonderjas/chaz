@@ -164,11 +164,22 @@ async function fetchBookLineForGame(gameId: number, targetFen: string): Promise<
   return match ? map[match] : null;
 }
 
+async function fetchBlunderEvaluation(startFen: string, blunderUci: string) {
+  try {
+    const chess = new Chess(startFen);
+    chess.move({ from: blunderUci.slice(0, 2), to: blunderUci.slice(2, 4), promotion: blunderUci[4] });
+    return await fetchEvaluationForFen(chess.fen());
+  } catch {
+    return null;
+  }
+}
+
 async function loadPuzzleDetails(puzzle: any) {
   const evalPromise = fetchEvaluationForFen(String(puzzle.start_fen));
   const bookPromise = fetchBookLineForGame(Number(puzzle.game_id), String(puzzle.start_fen));
-  const [evaluation, bookLine] = await Promise.all([evalPromise, bookPromise]);
-  return { evaluation, bookLine };
+  const blunderEvalPromise = puzzle.blunder_uci ? fetchBlunderEvaluation(String(puzzle.start_fen), String(puzzle.blunder_uci)) : Promise.resolve(null);
+  const [evaluation, bookLine, blunderEvaluation] = await Promise.all([evalPromise, bookPromise, blunderEvalPromise]);
+  return { evaluation, bookLine, blunderEvaluation };
 }
 
 async function fetchBookLinesForFen(fenBefore: string, posPly: number) {
