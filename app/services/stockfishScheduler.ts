@@ -52,6 +52,7 @@ class StockfishScheduler {
   private onFinishedCallback: (() => void) | null = null;
   private totalAnnotationTasks = 0;
   private localCache: Record<string, { cached: boolean; result: any }> = {};
+  private lastAnalysisDepth: number | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -67,6 +68,10 @@ class StockfishScheduler {
 
   public isReady() {
     return this.ready;
+  }
+
+  public getAnalysisDepth(): number | null {
+    return this.lastAnalysisDepth;
   }
 
   public onReadyChange(callback: (ready: boolean) => void) {
@@ -300,6 +305,37 @@ class StockfishScheduler {
     }
   }
 
+  public runBenchmark(fen: string): Promise<number> {
+    return new Promise((resolve) => {
+      if (!this.worker || !this.ready) {
+        resolve(14); // fallback default depth
+        return;
+      }
+
+      let maxDepthReached = 0;
+      const prevOnMessage = this.worker.onmessage;
+
+      this.worker.onmessage = (e) => {
+        const line = e.data;
+        if (line && line.startsWith('info')) {
+          const depthMatch = line.match(/depth (\d+)/);
+          if (depthMatch) {
+            const d = parseInt(depthMatch[1]);
+            if (d > maxDepthReached) maxDepthReached = d;
+          }
+        }
+        if (line && line.startsWith('bestmove')) {
+          if (this.worker) this.worker.onmessage = prevOnMessage;
+          resolve(maxDepthReached);
+        }
+      };
+
+      this.worker.postMessage('stop');
+      this.worker.postMessage(`position fen ${fen}`);
+      this.worker.postMessage('go movetime 250');
+    });
+  }
+
   public async addAnnotationTasks(tasks: AnnotationTask[]) {
     this.stopCurrentSearch();
     this.annotationQueue = [...tasks];
@@ -308,11 +344,33 @@ class StockfishScheduler {
     if (tasks.length > 0) {
       this.checkingCache = true;
       try {
+        const startFen = tasks[0].fen;
+        const benchmarkDepth = await this.runBenchmark(startFen);
+        
+        let targetDepth = 14;
+        if (benchmarkDepth <= 12) {
+          targetDepth = 12;
+        } else if (benchmarkDepth === 13 || benchmarkDepth === 14) {
+          targetDepth = 14;
+        } else if (benchmarkDepth === 15) {
+          targetDepth = 16;
+        } else if (benchmarkDepth === 16) {
+          targetDepth = 18;
+        } else {
+          targetDepth = 20;
+        }
+
+        this.lastAnalysisDepth = targetDepth;
+        console.log(`Benchmark completed. Depth reached: ${benchmarkDepth}. Selected target depth: ${targetDepth}`);
+
+        this.annotationQueue.forEach((t) => {
+          t.depth = targetDepth;
+        });
+
         const fens = tasks.map((t) => t.fen);
-        const depth = tasks[0]?.depth || 14;
-        this.localCache = await this.batchCheckCache(fens, depth);
+        this.localCache = await this.batchCheckCache(fens, targetDepth);
       } catch (e) {
-        console.error('Failed to batch check cache', e);
+        console.error('Failed to batch check cache or run benchmark', e);
         this.localCache = {};
       } finally {
         this.checkingCache = false;
@@ -331,6 +389,7 @@ class StockfishScheduler {
     this.activeAnnotation = null;
     this.onProgressCallback = null;
     this.onFinishedCallback = null;
+    this.lastAnalysisDepth = null;
   }
 
   public registerCallbacks(
