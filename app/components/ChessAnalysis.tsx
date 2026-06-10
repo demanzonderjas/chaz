@@ -217,10 +217,10 @@ export function ChessAnalysis() {
       const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
       if (!entry) return false;
       if (!baseState) setBaseState({ history, cursor });
-      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen);
+      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen, orientation);
       return true;
     },
-    [currentFen, cursor, analyzeLastMove, initialFen, baseState, history]
+    [currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation]
   );
 
   const playUciMove = useCallback((uci: string) => {
@@ -231,8 +231,8 @@ export function ChessAnalysis() {
     const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
     setHistory(next);
     setCursor(next.length - 1);
-    setTimeout(() => analyzeLastMove(next, initialFen), 0);
-  }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState]);
+    setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
+  }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState, orientation]);
 
   const loadRawPgn = useCallback((pgn: string, id?: number) => {
     const { sf, entries } = parsePgn(pgn);
@@ -240,7 +240,7 @@ export function ChessAnalysis() {
     setHistory(entries);
     setCursor(-1);
     resetAnalysis();
-    analyzeGame(entries, sf);
+    analyzeGame(entries, sf, getPlayerOrientation(pgn));
     saveGamePgn(pgn, setActiveGame);
     setupGameMeta(pgn, setOrientation, setActiveGame, id);
   }, [analyzeGame, resetAnalysis]);
@@ -250,20 +250,9 @@ export function ChessAnalysis() {
     setInitialFen(sf);
     setHistory(entries);
     resetAnalysis();
-    analyzeGame(entries, sf);
+    analyzeGame(entries, sf, getPlayerOrientation(pgn));
     setupGameMeta(pgn, setOrientation, setActiveGame, id);
-    
-    const target = normalizeBookFen(startFen);
-    let targetCursor = -1;
-    if (normalizeBookFen(sf) === target) {
-      targetCursor = -1;
-    } else {
-      const idx = entries.findIndex(e => normalizeBookFen(e.fen) === target);
-      if (idx !== -1) {
-        targetCursor = idx;
-      }
-    }
-    setCursor(targetCursor);
+    setCursor(findTargetCursor(entries, sf, startFen));
     setMode('analysis');
   }, [analyzeGame, resetAnalysis]);
 
@@ -396,7 +385,7 @@ export function ChessAnalysis() {
                   className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50">
                   {loadingGameMistakes ? 'Loading...' : '🧩 Practice Mistakes'}
                 </button>
-                <button onClick={() => analyzeGame(history, initialFen)}
+                <button onClick={() => analyzeGame(history, initialFen, orientation)}
                   className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors">
                   Re-analyze
                 </button>
@@ -835,10 +824,17 @@ function executeMove(fen: string, from: string, to: string, promo?: string) {
   }
 }
 
-function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any, initialFen: string) {
+function findTargetCursor(entries: HistoryEntry[], sf: string, startFen: string) {
+  const target = normalizeBookFen(startFen);
+  if (normalizeBookFen(sf) === target) return -1;
+  const idx = entries.findIndex(e => normalizeBookFen(e.fen) === target);
+  return idx !== -1 ? idx : -1;
+}
+
+function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any, initialFen: string, orientation?: 'white' | 'black') {
   setHistory((prev: HistoryEntry[]) => {
     const next = [...prev.slice(0, cursor + 1), entry];
-    setTimeout(() => analyzeLastMove(next, initialFen), 0);
+    setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
     return next;
   });
   setCursor((c: number) => c + 1);
