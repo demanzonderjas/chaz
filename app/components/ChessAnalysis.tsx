@@ -96,8 +96,7 @@ export function ChessAnalysis() {
 
   useEffect(() => {
     if (!ready) return;
-    const timer = setTimeout(() => analyse(boardFen, boardColor, 16), 200);
-    return () => clearTimeout(timer);
+    analyse(boardFen, boardColor, 16);
   }, [ready, boardFen, boardColor, analyse]);
 
   // Keyboard navigation
