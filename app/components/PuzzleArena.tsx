@@ -356,6 +356,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [attemptReported, setAttemptReported] = useState(false);
   const [openings, setOpenings] = useState<{ id: number; name: string; color: string; game_count: number }[]>([]);
   const [selectedOpening, setSelectedOpening] = useState<string>('all');
+  const [selectedRecency, setSelectedRecency] = useState<string>('all');
 
   const [fetchKey, setFetchKey] = useState(0);
 
@@ -400,6 +401,9 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       const [opId, color] = selectedOpening.split('_');
       url += `&openingId=${opId}&color=${color}`;
     }
+    if (selectedRecency !== 'all') {
+      url += `&days=${selectedRecency}`;
+    }
 
     fetch(url)
       .then(res => {
@@ -425,7 +429,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     return () => {
       active = false;
     };
-  }, [puzzleType, fetchKey, selectedOpening]);
+  }, [puzzleType, fetchKey, selectedOpening, selectedRecency]);
 
   const [activeLineIdx, setActiveLineIdx] = useState<number>(0);
   
@@ -598,22 +602,40 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
             ))}
           </div>
 
-          <div className="mb-6">
-            <label className="block text-[10px] uppercase font-bold tracking-wider text-zinc-500 mb-1.5">
-              Opening Repertoire Filter
-            </label>
-            <select
-              value={selectedOpening}
-              onChange={(e) => setSelectedOpening(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-xs text-zinc-350 font-semibold focus:outline-none focus:border-zinc-700 cursor-pointer transition-colors"
-            >
-              <option value="all">All Openings</option>
-              {openings.map((op) => (
-                <option key={`${op.id}_${op.color}`} value={`${op.id}_${op.color}`}>
-                  {op.name} ({op.color === 'w' ? 'White' : 'Black'}) — {op.game_count} games
-                </option>
-              ))}
-            </select>
+          <div className="mb-6 grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] uppercase font-bold tracking-wider text-zinc-500 mb-1.5 font-sans">
+                Opening Filter
+              </label>
+              <select
+                value={selectedOpening}
+                onChange={(e) => setSelectedOpening(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-xs text-zinc-350 font-semibold focus:outline-none focus:border-zinc-700 cursor-pointer transition-colors"
+              >
+                <option value="all">All Openings</option>
+                {openings.map((op) => (
+                  <option key={`${op.id}_${op.color}`} value={`${op.id}_${op.color}`}>
+                    {op.name} ({op.color === 'w' ? 'White' : 'Black'})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase font-bold tracking-wider text-zinc-500 mb-1.5 font-sans">
+                Recency Filter
+              </label>
+              <select
+                value={selectedRecency}
+                onChange={(e) => setSelectedRecency(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-xs text-zinc-350 font-semibold focus:outline-none focus:border-zinc-700 cursor-pointer transition-colors"
+              >
+                <option value="all">All Time</option>
+                <option value="7">Last 7 Days</option>
+                <option value="14">Last 14 Days</option>
+                <option value="30">Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+              </select>
+            </div>
           </div>
 
           {puzzle && (

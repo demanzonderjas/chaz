@@ -36,11 +36,21 @@ function getSan(fen: string, uci: string): string {
   }
 }
 
-function buildPuzzleSql(openingId?: number, color?: string): { sql: string; args: any[] } {
+function getDateDaysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}.${mm}.${dd}`;
+}
+
+function buildPuzzleSql(openingId?: number, color?: string, days?: number): { sql: string; args: any[] } {
   let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ?`;
   const args: any[] = [];
   if (openingId !== undefined) { sql += ` AND g.opening_id = ?`; args.push(openingId); }
   if (color !== undefined) { sql += ` AND g.user_color = ?`; args.push(color); }
+  if (days !== undefined) { sql += ` AND g.played_date >= ?`; args.push(getDateDaysAgo(days)); }
   sql += ` ORDER BY g.played_date DESC, g.id DESC LIMIT 150`;
   return { sql, args };
 }
@@ -65,12 +75,48 @@ function chooseItem(items: any[], total: number, fallback: any) {
   return fallback;
 }
 
-async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string) {
-  const { sql, args } = buildPuzzleSql(openingId, color);
+function getRowFens(r: any) {
+  try {
+    const chess = new Chess(r.start_fen);
+    chess.move({ from: r.blunder_uci.slice(0, 2), to: r.blunder_uci.slice(2, 4), promotion: r.blunder_uci[4] });
+    return { normBefore: normalizeFen(r.start_fen), normAfter: normalizeFen(chess.fen()) };
+  } catch {
+    return null;
+  }
+}
+
+function mapRowsToFens(rows: any[], fens: string[]) {
+  return rows.map(r => {
+    const res = getRowFens(r);
+    if (!res) return null;
+    fens.push(res.normBefore, res.normAfter);
+    return { r, ...res };
+  }).filter(Boolean) as any[];
+}
+
+function isDropSignificant(eb: any, ea: any): boolean {
+  if (!eb || !ea) return true;
+  const drop = getWinProbability(getSideToMoveScore(eb)) - getWinProbability(-getSideToMoveScore(ea));
+  return drop >= 0.25;
+}
+
+async function filterMinorMistakes(rows: any[], type: string): Promise<any[]> {
+  if (type === 'opening' || type === 'book' || type === 'weakness') return rows;
+  const fens: string[] = [];
+  const list = mapRowsToFens(rows, fens);
+  if (fens.length === 0) return rows;
+  const evalMap = await fetchCachedEvalsForFens(Array.from(new Set(fens)));
+  return list.filter(item => isDropSignificant(evalMap[item.normBefore], evalMap[item.normAfter])).map(item => item.r);
+}
+
+async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string, days?: number) {
+  const { sql, args } = buildPuzzleSql(openingId, color, days);
   const rs = await turso.execute({ sql, args: [type, ...args] });
   if (rs.rows.length === 0) return null;
-  const { items, total } = computeWeights(rs.rows);
-  return chooseItem(items, total, rs.rows[0]);
+  const filtered = await filterMinorMistakes(rs.rows, type);
+  if (filtered.length === 0) return rs.rows.length > 0 ? rs.rows[0] : null; // fallback if all filtered out
+  const { items, total } = computeWeights(filtered);
+  return chooseItem(items, total, filtered[0]);
 }
 
 async function fetchPuzzleById(id: string) {
@@ -167,17 +213,12 @@ async function fetchBookLinesForFen(fenBefore: string, posPly: number) {
   return linesData;
 }
 
-async function fetchBookPuzzle(openingId?: number, color?: string) {
+async function fetchBookPuzzle(openingId?: number, color?: string, days?: number) {
   let gamesSql = 'SELECT id, pgn, white_name, black_name, result, user_color, played_date FROM games WHERE 1=1';
   const args: any[] = [];
-  if (openingId !== undefined) {
-    gamesSql += ' AND opening_id = ?';
-    args.push(openingId);
-  }
-  if (color !== undefined) {
-    gamesSql += ' AND user_color = ?';
-    args.push(color);
-  }
+  if (openingId !== undefined) { gamesSql += ' AND opening_id = ?'; args.push(openingId); }
+  if (color !== undefined) { gamesSql += ' AND user_color = ?'; args.push(color); }
+  if (days !== undefined) { gamesSql += ' AND played_date >= ?'; args.push(getDateDaysAgo(days)); }
   gamesSql += ' ORDER BY RANDOM() LIMIT 5';
   
   const gamesRs = await turso.execute({ sql: gamesSql, args });
@@ -372,7 +413,7 @@ function getGamePlyForFen(pgn: string, targetFen3: string): number {
   return -1;
 }
 
-async function fetchWeaknessPuzzle(openingId?: number, color?: string) {
+async function fetchWeaknessPuzzle(openingId?: number, color?: string, days?: number) {
   // 1. Fetch 200 random weak moves
   let pmSql = `
     SELECT pm.fen_norm, pm.uci, pm.san, pm.wins, pm.draws, pm.losses, pm.game_id
@@ -381,14 +422,9 @@ async function fetchWeaknessPuzzle(openingId?: number, color?: string) {
     WHERE pm.game_id IS NOT NULL AND (pm.losses > pm.wins OR pm.losses >= 2)
   `;
   const args: any[] = [];
-  if (openingId !== undefined) {
-    pmSql += ' AND g.opening_id = ?';
-    args.push(openingId);
-  }
-  if (color !== undefined) {
-    pmSql += ' AND g.user_color = ?';
-    args.push(color);
-  }
+  if (openingId !== undefined) { pmSql += ' AND g.opening_id = ?'; args.push(openingId); }
+  if (color !== undefined) { pmSql += ' AND g.user_color = ?'; args.push(color); }
+  if (days !== undefined) { pmSql += ' AND g.played_date >= ?'; args.push(getDateDaysAgo(days)); }
   pmSql += ' ORDER BY RANDOM() LIMIT 200';
 
   const pmRs = await turso.execute({ sql: pmSql, args });
@@ -547,22 +583,24 @@ export async function GET(req: NextRequest) {
   const type = req.nextUrl.searchParams.get('type') || 'tactical';
   const openingIdParam = req.nextUrl.searchParams.get('openingId');
   const colorParam = req.nextUrl.searchParams.get('color');
+  const daysParam = req.nextUrl.searchParams.get('days');
 
   const openingId = openingIdParam ? Number(openingIdParam) : undefined;
   const color = colorParam || undefined;
+  const days = daysParam ? Number(daysParam) : undefined;
 
   try {
     if (type === 'book') {
-      const data = await fetchBookPuzzle(openingId, color);
+      const data = await fetchBookPuzzle(openingId, color, days);
       if (!data) return NextResponse.json({ error: 'No book puzzles found' }, { status: 404 });
       return NextResponse.json(data);
     }
     if (type === 'weakness') {
-      const data = await fetchWeaknessPuzzle(openingId, color);
+      const data = await fetchWeaknessPuzzle(openingId, color, days);
       if (!data) return NextResponse.json({ error: 'No weakness puzzles found' }, { status: 404 });
       return NextResponse.json(data);
     }
-    const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle(type, openingId, color);
+    const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle(type, openingId, color, days);
     if (!puzzle) return NextResponse.json({ error: 'No puzzles found' }, { status: 404 });
     const details = await loadPuzzleDetails(puzzle);
     const gameResult = await fetchGameForScan(Number(puzzle.game_id));
@@ -784,39 +822,37 @@ function getPuzzleDescription(type: string, isOpp: boolean, san: string): string
   return isOpp ? `Opponent played ${san}. Find the winning response!` : `You played ${san} in the game. Find the correct move instead!`;
 }
 
-async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string) {
-  const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]];
-  if (!eb || !ea) return false;
-  const isWhite = normFens[i].split(' ')[1] === 'w';
-  const p = detectBlunderDetails(eb, ea, isWhite);
-  if (!p) return false;
+function isBlunder(eb: any, ea: any, isWhite: boolean): boolean {
+  return eb && ea && !!detectBlunderDetails(eb, ea, isWhite);
+}
 
-  const moveColor = isWhite ? 'w' : 'b';
-  const isOpponent = moveColor !== uUserColor;
-  const startFen = isOpponent ? fens[i + 1] : fens[i];
-  const evalAtStart = isOpponent ? ea : eb;
-  const bestUci = isOpponent ? ea.bestMove : eb.bestMove;
-  if (!bestUci) return false;
-
-  const prevMove = isOpponent ? history[i] : (i > 0 ? history[i - 1] : null);
+async function handleZw(game: any, startFen: string, bestUci: string, evalAtStart: any, prevMove: any, uUserColor: string) {
   const zw = detectZwischenzug(startFen, bestUci, evalAtStart, prevMove);
-  if (zw) {
-    const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
-    const desc = zw.isCapture
-      ? `Opponent captured on ${prevMove.to}. Find the intermediate move (zwischenzug) instead of recapturing!`
-      : `Opponent threatened your ${zw.threatenedPieceType === 'p' ? 'pawn' : zw.threatenedPieceType === 'q' ? 'queen' : zw.threatenedPieceType === 'r' ? 'rook' : zw.threatenedPieceType === 'b' ? 'bishop' : 'knight'}. Find the intermediate move (zwischenzug) instead of directly defending!`;
-    const row = [game.id, startFen, bestUci, zw.solution_san, uUserColor, desc, zw.naturalUci, zw.naturalSan, gameTitle];
-    return await insertPuzzle(row, 'zwischenzug');
-  }
-
-  const blunderUci = history[i].from + history[i].to + (history[i].promotion || '');
-  const blunderSan = history[i].san;
+  if (!zw) return null;
   const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
+  const desc = zw.isCapture
+    ? `Opponent captured on ${prevMove.to}. Find the intermediate move (zwischenzug) instead of recapturing!`
+    : `Opponent threatened your ${zw.threatenedPieceType === 'p' ? 'pawn' : zw.threatenedPieceType === 'q' ? 'queen' : zw.threatenedPieceType === 'r' ? 'rook' : zw.threatenedPieceType === 'b' ? 'bishop' : 'knight'}. Find the intermediate move (zwischenzug) instead of directly defending!`;
+  return await insertPuzzle([game.id, startFen, bestUci, zw.solution_san, uUserColor, desc, zw.naturalUci, zw.naturalSan, gameTitle], 'zwischenzug');
+}
 
+async function handleStd(game: any, startFen: string, bestUci: string, i: number, isOpponent: boolean, evalAtStart: any, blunderUci: string, blunderSan: string, uUserColor: string) {
+  const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
   const puzzleType = getPuzzleType(startFen, i, isOpponent, evalAtStart);
   const desc = getPuzzleDescription(puzzleType, isOpponent, blunderSan);
   const row = [game.id, startFen, bestUci, getSan(startFen, bestUci), uUserColor, desc, blunderUci, blunderSan, gameTitle];
   return await insertPuzzle(row, puzzleType);
+}
+
+async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string) {
+  const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]], isWhite = normFens[i].split(' ')[1] === 'w';
+  if (!isBlunder(eb, ea, isWhite)) return false;
+  const isOpp = (isWhite ? 'w' : 'b') !== uUserColor, start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
+  if (!bestUci) return false;
+  const zw = await handleZw(game, start, bestUci, isOpp ? ea : eb, isOpp ? history[i] : (history[i - 1] || null), uUserColor);
+  if (zw !== null) return zw;
+  const blunder = history[i].from + history[i].to + (history[i].promotion || '');
+  return await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, blunder, history[i].san, uUserColor);
 }
 
 async function scanGame(gameId: number) {
