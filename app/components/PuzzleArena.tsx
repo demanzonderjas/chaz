@@ -610,6 +610,8 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                 boardOrientation: puzzle.player_color === 'w' ? 'white' : 'black',
                 onPieceDrop,
                 squareRenderer,
+                darkSquareStyle: { backgroundColor: '#b58863' },
+                lightSquareStyle: { backgroundColor: '#f0d9b5' },
               }}
             >
               <Chessboard />

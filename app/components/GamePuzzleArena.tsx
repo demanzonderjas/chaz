@@ -257,7 +257,16 @@ export function GamePuzzleArena({ mistakes, gameTitle, playerColor, onExit }: { 
     <div className="flex flex-1 overflow-hidden">
       <div className="flex-1 flex items-center justify-center p-6 bg-zinc-950 relative">
         <div className="relative aspect-square shadow-2xl rounded-lg overflow-hidden border border-zinc-800/40" style={{ width: 'min(calc(100vh - 120px), calc(100vw - 440px))' }}>
-          <ChessboardProvider options={{ position: boardFen, boardOrientation: playerColor, onPieceDrop, squareRenderer }}>
+          <ChessboardProvider
+            options={{
+              position: boardFen,
+              boardOrientation: playerColor,
+              onPieceDrop,
+              squareRenderer,
+              darkSquareStyle: { backgroundColor: '#b58863' },
+              lightSquareStyle: { backgroundColor: '#f0d9b5' },
+            }}
+          >
             <Chessboard />
           </ChessboardProvider>
           {activeMistake.playedUci && (

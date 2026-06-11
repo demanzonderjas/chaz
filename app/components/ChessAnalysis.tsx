@@ -478,7 +478,7 @@ export function ChessAnalysis() {
                 arrows: [],
                 allowDrawingArrows: true,
                 animationDurationInMs: 150,
-                darkSquareStyle: { backgroundColor: '#4a7c59' },
+                darkSquareStyle: { backgroundColor: '#b58863' },
                 lightSquareStyle: { backgroundColor: '#f0d9b5' },
                 onPieceDrop,
                 squareRenderer,
