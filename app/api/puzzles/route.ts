@@ -127,9 +127,26 @@ async function fetchPuzzleById(id: string) {
 
 async function fetchEvaluationForFen(fen: string) {
   const norm = fen.split(' ').slice(0, 4).join(' ');
-  const sql = `SELECT result_json FROM analysis WHERE engine='sf18' AND limit_type='depth' AND multipv=4 AND fen_norm = ?`;
+  const sql = `
+    SELECT multipv, limit_value, result_json 
+    FROM analysis 
+    WHERE engine = 'sf18' 
+      AND limit_type = 'depth' 
+      AND (multipv = 1 OR multipv = 4) 
+      AND fen_norm = ?
+  `;
   const rs = await turso.execute({ sql, args: [norm] });
-  return rs.rows[0] ? JSON.parse(rs.rows[0].result_json as string) : null;
+  if (rs.rows.length === 0) return null;
+  
+  let bestRow = rs.rows[0];
+  for (const row of rs.rows) {
+    const bm = Number(bestRow.multipv);
+    const rm = Number(row.multipv);
+    if (rm > bm || (rm === bm && Number(row.limit_value) > Number(bestRow.limit_value))) {
+      bestRow = row;
+    }
+  }
+  return JSON.parse(bestRow.result_json as string);
 }
 
 function getGameFensUpTo(pgn: string, targetFen: string): string[] {
@@ -436,8 +453,31 @@ async function fetchRawWeakMoves(openingId?: number, color?: string, days?: numb
 async function fetchCachedAnalysis(fens: string[]) {
   if (fens.length === 0) return [];
   const placeholders = fens.map(() => '?').join(',');
-  const sql = `SELECT fen_norm, result_json FROM analysis WHERE engine = 'sf18' AND limit_type = 'depth' AND multipv = 4 AND fen_norm IN (${placeholders})`;
-  return (await turso.execute({ sql, args: fens })).rows;
+  const sql = `
+    SELECT fen_norm, multipv, limit_value, result_json 
+    FROM analysis 
+    WHERE engine = 'sf18' 
+      AND limit_type = 'depth' 
+      AND (multipv = 1 OR multipv = 4) 
+      AND fen_norm IN (${placeholders})
+  `;
+  const rs = await turso.execute({ sql, args: fens });
+  
+  const group: Record<string, any> = {};
+  rs.rows.forEach(row => {
+    const fen = String(row.fen_norm);
+    const existing = group[fen];
+    if (!existing) {
+      group[fen] = row;
+    } else {
+      const extM = Number(existing.multipv);
+      const rowM = Number(row.multipv);
+      if (rowM > extM || (rowM === extM && Number(row.limit_value) > Number(existing.limit_value))) {
+        group[fen] = row;
+      }
+    }
+  });
+  return Object.values(group);
 }
 
 async function fetchPuzzleStatsForFens(fens: string[]) {
@@ -555,10 +595,41 @@ async function fetchGameForScan(gameId: number) {
 
 async function fetchCachedEvalsForFens(normFens: string[]) {
   const placeholders = normFens.map(() => '?').join(',');
-  const sql = `SELECT fen_norm, result_json FROM analysis WHERE engine='sf18' AND limit_type='depth' AND multipv=4 AND fen_norm IN (${placeholders})`;
+  const sql = `
+    SELECT fen_norm, multipv, limit_value, result_json 
+    FROM analysis 
+    WHERE engine = 'sf18' 
+      AND limit_type = 'depth' 
+      AND (multipv = 1 OR multipv = 4) 
+      AND fen_norm IN (${placeholders})
+  `;
   const rs = await turso.execute({ sql, args: normFens });
   const map: Record<string, any> = {};
-  rs.rows.forEach(r => { map[String(r.fen_norm)] = JSON.parse(r.result_json as string); });
+  
+  rs.rows.forEach(r => {
+    const fen = String(r.fen_norm);
+    const existing = map[fen];
+    const parsed = JSON.parse(r.result_json as string);
+    if (!existing) {
+      map[fen] = parsed;
+      map[fen]._multipv = Number(r.multipv);
+      map[fen]._limit_value = Number(r.limit_value);
+    } else {
+      const extM = Number(existing._multipv);
+      const rowM = Number(r.multipv);
+      if (rowM > extM || (rowM === extM && Number(r.limit_value) > Number(existing._limit_value))) {
+        map[fen] = parsed;
+        map[fen]._multipv = rowM;
+        map[fen]._limit_value = Number(r.limit_value);
+      }
+    }
+  });
+  
+  Object.keys(map).forEach(k => {
+    delete map[k]._multipv;
+    delete map[k]._limit_value;
+  });
+  
   return map;
 }
 

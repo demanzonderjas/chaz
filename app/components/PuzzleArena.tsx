@@ -199,6 +199,60 @@ function isLegalMove(fen: string, from: string, to: string, promo?: string): boo
   }
 }
 
+function moveSafe(chess: Chess, m: string) {
+  try {
+    const r = chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+    return { san: r.san, fen: chess.fen() };
+  } catch { return null; }
+}
+
+function getBestLineMoves(puzzle: any, evaluation: any): { san: string; fen: string }[] {
+  const pv = evaluation?.pv || [];
+  if (!pv.length || !puzzle?.start_fen) return [];
+  const chess = new Chess(puzzle.start_fen);
+  return pv.slice(0, 14).map((m: string) => moveSafe(chess, m)).filter(Boolean) as any;
+}
+
+const BestLineViewer = ({ 
+  moves, 
+  boardFen, 
+  setBoardFen, 
+  startFen 
+}: { 
+  moves: any[]; 
+  boardFen: string; 
+  setBoardFen: (fen: string) => void; 
+  startFen: string;
+}) =>
+  !moves?.length ? null : (
+    <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2">
+      <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Best Line Explorer</div>
+      <div className="flex flex-wrap gap-1 items-center">
+        <button 
+          onClick={() => {
+            playMoveSound(false);
+            setBoardFen(startFen);
+          }} 
+          className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${boardFen === startFen ? 'bg-emerald-800 border-emerald-600 text-white' : 'bg-emerald-950 border-emerald-900 text-emerald-405 hover:text-emerald-350'}`}
+        >
+          Start
+        </button>
+        {moves.map((m: any, i: number) => (
+          <button 
+            key={i} 
+            onClick={() => {
+              playMoveSound(m.san.includes('x'));
+              setBoardFen(m.fen);
+            }} 
+            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${boardFen === m.fen ? 'bg-emerald-800 border-emerald-600 text-white' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+          >
+            {m.san}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
 const StatusCard = ({ 
   status, 
   solution, 
@@ -522,6 +576,36 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     return () => window.removeEventListener('keydown', onKey);
   }, [status, puzzleType, puzzle, activeLineIdx, activeMoveIdx, activeLine, setBoardFen]);
 
+  // Keyboard navigation for tactical (non-book) best line
+  useEffect(() => {
+    if (status !== 'correct' && status !== 'solved') return;
+    if (puzzleType === 'book') return;
+    const moves = getBestLineMoves(puzzle, evaluation);
+    if (!moves.length) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+
+      const idx = moves.findIndex((m) => m.fen === boardFen);
+      const isR = e.key === 'ArrowRight';
+
+      if (isR && idx < moves.length - 1) {
+        setBoardFen(moves[idx + 1].fen);
+        playMoveSound(moves[idx + 1].san.includes('x'));
+      } else if (!isR) {
+        setBoardFen(idx > 0 ? moves[idx - 1].fen : puzzle.start_fen);
+        playMoveSound(false);
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [status, puzzleType, puzzle, evaluation, boardFen, setBoardFen]);
+
+  const bestLineMoves = getBestLineMoves(puzzle, evaluation);
+
   const handleTypeChange = (type: PuzzleType) => {
     setPuzzleType(type);
     setPuzzle(null); setEvaluation(null); setBlunderEvaluation(null); setBookLine(null);
@@ -712,7 +796,10 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                     activeMoveIdx={activeMoveIdx}
                   />
                 ) : (
-                  <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />
+                  <>
+                    <BestLineViewer moves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={puzzle.start_fen} />
+                    <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />
+                  </>
                 )
               )}
             </>
