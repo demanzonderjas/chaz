@@ -154,10 +154,9 @@ async function queryBookLinesForFens(fens: string[]): Promise<Record<string, str
   return map;
 }
 
-async function fetchBookLineForGame(gameId: number, targetFen: string): Promise<string | null> {
-  const game = await fetchGameForScan(gameId);
-  if (!game) return null;
-  const fens = getGameFensUpTo(game.pgn as string, targetFen);
+async function fetchBookLineForGame(gameOrPgn: number | string, targetFen: string): Promise<string | null> {
+  const pgn = typeof gameOrPgn === 'string' ? gameOrPgn : (await fetchGameForScan(gameOrPgn))?.pgn as string;
+  const fens = pgn ? getGameFensUpTo(pgn, targetFen) : [];
   if (fens.length === 0) return null;
   const map = await queryBookLinesForFens(fens);
   const match = fens.find(f => map[f]);
@@ -424,169 +423,95 @@ function getGamePlyForFen(pgn: string, targetFen3: string): number {
   return -1;
 }
 
-async function fetchWeaknessPuzzle(openingId?: number, color?: string, days?: number) {
-  // 1. Fetch 200 random weak moves
-  let pmSql = `
-    SELECT pm.fen_norm, pm.uci, pm.san, pm.wins, pm.draws, pm.losses, pm.game_id
-    FROM position_moves pm
-    JOIN games g ON pm.game_id = g.id
-    WHERE pm.game_id IS NOT NULL AND (pm.losses > pm.wins OR pm.losses >= 2)
-  `;
+async function fetchRawWeakMoves(openingId?: number, color?: string, days?: number) {
+  let sql = `SELECT pm.*, g.pgn, g.white_name, g.black_name, g.played_date FROM position_moves pm JOIN games g ON pm.game_id = g.id WHERE pm.game_id IS NOT NULL AND (pm.losses > pm.wins OR pm.losses >= 2)`;
   const args: any[] = [];
-  if (openingId !== undefined) { pmSql += ' AND g.opening_id = ?'; args.push(openingId); }
-  if (color !== undefined) { pmSql += ' AND g.user_color = ?'; args.push(color); }
-  if (days !== undefined) { pmSql += ' AND g.played_date >= ?'; args.push(getDateDaysAgo(days)); }
-  pmSql += ' ORDER BY RANDOM() LIMIT 200';
+  if (openingId !== undefined) { sql += ' AND g.opening_id = ?'; args.push(openingId); }
+  if (color !== undefined) { sql += ' AND g.user_color = ?'; args.push(color); }
+  if (days !== undefined) { sql += ' AND g.played_date >= ?'; args.push(getDateDaysAgo(days)); }
+  sql += ' ORDER BY RANDOM() LIMIT 200';
+  return (await turso.execute({ sql, args })).rows;
+}
 
-  const pmRs = await turso.execute({ sql: pmSql, args });
-  if (pmRs.rows.length === 0) return null;
+async function fetchCachedAnalysis(fens: string[]) {
+  if (fens.length === 0) return [];
+  const placeholders = fens.map(() => '?').join(',');
+  const sql = `SELECT fen_norm, result_json FROM analysis WHERE engine = 'sf18' AND limit_type = 'depth' AND multipv = 4 AND fen_norm IN (${placeholders})`;
+  return (await turso.execute({ sql, args: fens })).rows;
+}
 
-  // 2. Map FENs to query
-  const fenMap = new Map<string, any>();
-  const fensToQuery: string[] = [];
-  pmRs.rows.forEach(row => {
-    const fen4 = String(row.fen_norm) + ' -';
-    fensToQuery.push(fen4);
-    fenMap.set(fen4, row);
-  });
+async function fetchPuzzleStatsForFens(fens: string[]) {
+  if (fens.length === 0) return new Map<string, number>();
+  const sql = `SELECT start_fen, mistakes FROM puzzle_stats WHERE start_fen IN (${fens.map(() => '?').join(',')})`;
+  const rs = await turso.execute({ sql, args: fens });
+  const map = new Map<string, number>();
+  rs.rows.forEach(r => map.set(String(r.start_fen), Number(r.mistakes || 0)));
+  return map;
+}
 
-  // 3. Query analysis in one fast batch
-  const placeholders = fensToQuery.map(() => '?').join(',');
-  const analysisSql = `
-    SELECT fen_norm, result_json
-    FROM analysis
-    WHERE engine = 'sf18'
-      AND limit_type = 'depth'
-      AND multipv = 4
-      AND fen_norm IN (${placeholders})
-  `;
-  const aRs = await turso.execute({ sql: analysisSql, args: fensToQuery });
-  if (aRs.rows.length === 0) return null;
+const mapCandidate = (r: any, pm: any, ev: any, statsMap: Map<string, number>) => ({
+  fen: String(r.fen_norm), playedUci: String(pm.uci), playedSan: String(pm.san),
+  engineBestMove: ev.bestMove, wins: Number(pm.wins || 0), draws: Number(pm.draws || 0),
+  losses: Number(pm.losses || 0), gameId: Number(pm.game_id), evalData: ev,
+  mistakes: statsMap.get(String(r.fen_norm)) || 0, pgn: String(pm.pgn),
+  whiteName: String(pm.white_name), blackName: String(pm.black_name), playedDate: String(pm.played_date)
+});
 
-  // 4. Form candidate list
-  let candidates: {
-    fen: string;
-    playedUci: string;
-    playedSan: string;
-    engineBestMove: string;
-    wins: number;
-    draws: number;
-    losses: number;
-    gameId: number;
-    evalData: any;
-    mistakes: number;
-  }[] = [];
+function buildWeaknessCandidates(analysisRows: any[], fenMap: Map<string, any>, statsMap: Map<string, number>) {
+  return analysisRows.map(r => {
+    const pm = fenMap.get(String(r.fen_norm)), ev = JSON.parse(r.result_json as string);
+    return pm && ev.bestMove && ev.bestMove !== String(pm.uci) ? mapCandidate(r, pm, ev, statsMap) : null;
+  }).filter(Boolean) as any[];
+}
 
-  // Get mistakes from puzzle_stats for these candidate FENs
-  const candidateFens = aRs.rows.map(r => String(r.fen_norm));
-  const statsMap = new Map<string, number>();
-  if (candidateFens.length > 0) {
-    const statPlaceholders = candidateFens.map(() => '?').join(',');
-    const statRs = await turso.execute({
-      sql: `SELECT start_fen, mistakes FROM puzzle_stats WHERE start_fen IN (${statPlaceholders})`,
-      args: candidateFens
-    });
-    statRs.rows.forEach(r => {
-      statsMap.set(String(r.start_fen), Number(r.mistakes || 0));
-    });
+const getCandidateWeight = (c: any) => Math.max(1, c.losses - c.wins) * (1 + c.mistakes * 5);
+
+function chooseWeightedCandidate(candidates: any[]) {
+  const weights = candidates.map(getCandidateWeight);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let rand = Math.random() * total;
+  const idx = candidates.findIndex((_, i) => (rand -= weights[i]) <= 0);
+  return candidates[idx !== -1 ? idx : 0];
+}
+
+const filterCandidatesByPly = async (candidates: any[]) => {
+  let list = candidates;
+  while (list.length > 0) {
+    const sel = chooseWeightedCandidate(list);
+    const ply = getGamePlyForFen(sel.pgn, sel.fen.split(' ').slice(0, 3).join(' '));
+    if (ply >= 6) return sel;
+    list = list.filter(c => c !== sel);
   }
-
-  for (const aRow of aRs.rows) {
-    const fen4 = String(aRow.fen_norm);
-    const evalData = JSON.parse(aRow.result_json as string);
-    const pmRow = fenMap.get(fen4);
-    if (!pmRow) continue;
-
-    const bestMove = evalData.bestMove;
-    const playedUci = String(pmRow.uci);
-
-    if (bestMove && bestMove !== playedUci) {
-      candidates.push({
-        fen: fen4,
-        playedUci,
-        playedSan: String(pmRow.san),
-        engineBestMove: bestMove,
-        wins: Number(pmRow.wins || 0),
-        draws: Number(pmRow.draws || 0),
-        losses: Number(pmRow.losses || 0),
-        gameId: Number(pmRow.game_id),
-        evalData,
-        mistakes: statsMap.get(fen4) || 0
-      });
-    }
-  }
-
-  if (candidates.length === 0) return null;
-
-  // 5. Select a candidate, check ply >= 6, retry if not met
-  while (candidates.length > 0) {
-    // Perform weighted random selection
-    let totalWeight = 0;
-    const poolWithWeights = candidates.map(c => {
-      const weakness = Math.max(1, c.losses - c.wins);
-      const weight = weakness * (1 + c.mistakes * 5);
-      totalWeight += weight;
-      return { c, weight };
-    });
-
-    let randomVal = Math.random() * totalWeight;
-    let selectedIndex = 0;
-    for (let i = 0; i < poolWithWeights.length; i++) {
-      randomVal -= poolWithWeights[i].weight;
-      if (randomVal <= 0) {
-        selectedIndex = i;
-        break;
-      }
-    }
-    const selected = poolWithWeights[selectedIndex].c;
-
-    // Fetch game to verify ply >= 6
-    const game = await fetchGameForScan(selected.gameId);
-    if (!game) {
-      candidates.splice(selectedIndex, 1);
-      continue;
-    }
-
-    const pgn = String(game.pgn);
-    const fen3 = selected.fen.split(' ').slice(0, 3).join(' ');
-    const ply = getGamePlyForFen(pgn, fen3);
-
-    if (ply < 6) {
-      candidates.splice(selectedIndex, 1);
-      continue;
-    }
-
-    // Found a valid candidate with ply >= 6!
-    const turn = selected.fen.split(' ')[1]; // 'w' or 'b'
-    const solutionSan = getSan(selected.fen, selected.engineBestMove);
-    const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
-    const description = `You played ${selected.playedSan} in the game which led to a loss. Find the best move!`;
-
-    const puzzle = {
-      id: -300000 - selected.gameId * 100 - Math.floor(Math.random() * 100),
-      type: 'weakness',
-      game_id: selected.gameId,
-      start_fen: selected.fen,
-      solution_uci: selected.engineBestMove,
-      solution_san: solutionSan,
-      player_color: turn,
-      description,
-      blunder_uci: selected.playedUci,
-      blunder_san: selected.playedSan,
-      game_title: gameTitle,
-      game_pgn: pgn
-    };
-
-    const bookLine = await fetchBookLineForGame(selected.gameId, selected.fen);
-
-    return {
-      puzzle,
-      evaluation: selected.evalData,
-      bookLine
-    };
-  }
-
   return null;
+};
+
+const buildWeaknessPuzzleObject = (s: any, solutionSan: string) => ({
+  id: -300000 - s.gameId * 100 - Math.floor(Math.random() * 100),
+  type: 'weakness', game_id: s.gameId, start_fen: s.fen,
+  solution_uci: s.engineBestMove, solution_san: solutionSan, player_color: s.fen.split(' ')[1],
+  description: `You played ${s.playedSan} in the game which led to a loss. Find the best move!`,
+  blunder_uci: s.playedUci, blunder_san: s.playedSan,
+  game_title: `${s.whiteName} vs ${s.blackName} (${s.playedDate})`, game_pgn: s.pgn
+});
+
+async function buildWeaknessPuzzleResult(s: any) {
+  const solutionSan = getSan(s.fen, s.engineBestMove);
+  return {
+    puzzle: buildWeaknessPuzzleObject(s, solutionSan),
+    evaluation: s.evalData,
+    bookLine: await fetchBookLineForGame(s.pgn, s.fen)
+  };
+}
+
+async function fetchWeaknessPuzzle(openingId?: number, color?: string, days?: number) {
+  const rawMoves = await fetchRawWeakMoves(openingId, color, days);
+  if (rawMoves.length === 0) return null;
+  const fenMap = new Map(rawMoves.map(r => [String(r.fen_norm) + ' -', r]));
+  const analysisRows = await fetchCachedAnalysis(Array.from(fenMap.keys()));
+  const statsMap = await fetchPuzzleStatsForFens(analysisRows.map(r => String(r.fen_norm)));
+  const cand = buildWeaknessCandidates(analysisRows, fenMap, statsMap);
+  const selected = await filterCandidatesByPly(cand);
+  return selected ? buildWeaknessPuzzleResult(selected) : null;
 }
 
 export async function GET(req: NextRequest) {
