@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import stockfishScheduler, { AnnotationTask } from '../services/stockfishScheduler';
 
-export type AnnotationType = 'book' | 'brilliant' | 'mistake' | 'blunder';
+export type AnnotationType = 'book' | 'brilliant' | 'mistake' | 'blunder' | 'missed_book';
 
 export type MoveAnnotation = {
   types: AnnotationType[];
@@ -54,7 +54,7 @@ const getUpdatedAnnotation = (existing: MoveAnnotation, cpBefore: number, cpAfte
   const types: AnnotationType[] = (existing.types ?? []).filter((t) => t === 'book');
   const isBook = types.includes('book');
   let engineType = isBook ? null : classifyMove(cpBefore, cpAfter);
-  if (!isBook && existing.isMissedBook && !engineType) engineType = 'mistake';
+  if (!isBook && existing.isMissedBook && !engineType) engineType = 'missed_book';
   if (engineType) types.push(engineType);
   return { ...existing, types, cpLoss: isBook ? 0 : cpBefore - cpAfter, score: afterScore };
 };

@@ -20,10 +20,11 @@ import { preprocessPgn, isUserBlack } from '../services/pgn';
 type Arrow = { startSquare: string; endSquare: string; color: string };
 
 const ANNOTATION_ICONS: Record<string, { symbol: string; bg: string; text: string }> = {
-  book:      { symbol: '📖', bg: '#2563eb', text: '#ffffff' },
-  brilliant: { symbol: '!!', bg: '#0d9488', text: '#ffffff' },
-  mistake:   { symbol: '?',  bg: '#ea580c', text: '#ffffff' },
-  blunder:   { symbol: '??', bg: '#dc2626', text: '#ffffff' },
+  book:        { symbol: '📖',   bg: '#2563eb', text: '#ffffff' },
+  brilliant:   { symbol: '!!',   bg: '#0d9488', text: '#ffffff' },
+  mistake:     { symbol: '?',    bg: '#ea580c', text: '#ffffff' },
+  blunder:     { symbol: '??',   bg: '#dc2626', text: '#ffffff' },
+  missed_book: { symbol: '📖?',  bg: '#f59e0b', text: '#ffffff' },
 };
 
 interface GameMeta {
@@ -234,27 +235,46 @@ export function ChessAnalysis() {
     setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
   }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState, orientation]);
 
+  const unloadGame = useCallback(() => {
+    setActiveGame(null);
+    setGameMistakes([]);
+    setRelevantBookLine(null);
+    setBaseState(null);
+    setExplorerLine(null);
+    setExplorerMoveIdx(-1);
+  }, []);
+
+  const importGameData = useCallback((pgn: string, id?: number) => {
+    saveGamePgn(pgn, setActiveGame);
+    setupGameMeta(pgn, setOrientation, setActiveGame, id);
+  }, []);
+
+  const finishPuzzleLoad = useCallback((entries: HistoryEntry[], sf: string, startFen: string) => {
+    setCursor(findTargetCursor(entries, sf, startFen));
+    setMode('analysis');
+  }, []);
+
   const loadRawPgn = useCallback((pgn: string, id?: number) => {
+    unloadGame();
     const { sf, entries } = parsePgn(pgn);
     setInitialFen(sf);
     setHistory(entries);
     setCursor(-1);
     resetAnalysis();
     analyzeGame(entries, sf, getPlayerOrientation(pgn));
-    saveGamePgn(pgn, setActiveGame);
-    setupGameMeta(pgn, setOrientation, setActiveGame, id);
-  }, [analyzeGame, resetAnalysis]);
+    importGameData(pgn, id);
+  }, [analyzeGame, resetAnalysis, unloadGame, importGameData]);
 
   const loadGameFromPuzzle = useCallback((pgn: string, startFen: string, id?: number) => {
+    unloadGame();
     const { sf, entries } = parsePgn(pgn);
     setInitialFen(sf);
     setHistory(entries);
     resetAnalysis();
     analyzeGame(entries, sf, getPlayerOrientation(pgn));
     setupGameMeta(pgn, setOrientation, setActiveGame, id);
-    setCursor(findTargetCursor(entries, sf, startFen));
-    setMode('analysis');
-  }, [analyzeGame, resetAnalysis]);
+    finishPuzzleLoad(entries, sf, startFen);
+  }, [analyzeGame, resetAnalysis, unloadGame, finishPuzzleLoad]);
 
   // PGN load
   const loadPgn = useCallback(() => {
@@ -374,6 +394,10 @@ export function ChessAnalysis() {
           )}
         </div>
         <div className="flex gap-2">
+          <button onClick={() => setShowPgnPanel((v) => !v)}
+            className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer">
+            📥 {showPgnPanel ? 'Close PGN' : 'Import PGN'}
+          </button>
           {history.length > 0 && (
             analyzing ? (
               <span className="text-xs px-3 py-1 rounded bg-yellow-900/50 text-yellow-300 border border-yellow-800">
@@ -404,10 +428,6 @@ export function ChessAnalysis() {
           <button onClick={() => setShowLibrary(true)}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
             📚 Library
-          </button>
-          <button onClick={() => setShowPgnPanel((v) => !v)}
-            className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
-            {showPgnPanel ? 'Close PGN' : 'Import PGN'}
           </button>
           <button onClick={() => setOrientation((o) => o === 'white' ? 'black' : 'white')}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">

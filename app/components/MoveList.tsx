@@ -12,10 +12,11 @@ type Props = {
 };
 
 const ANNOTATION_ICONS: Record<string, { symbol: string; className: string; title: string }> = {
-  book:      { symbol: '📖', className: 'text-blue-400',   title: 'Book move'  },
-  brilliant: { symbol: '!!', className: 'text-teal-300',   title: 'Brilliancy' },
-  mistake:   { symbol: '?',  className: 'text-orange-400', title: 'Mistake'    },
-  blunder:   { symbol: '??', className: 'text-red-400',    title: 'Blunder'    },
+  book:        { symbol: '📖',   className: 'text-blue-400',   title: 'Book move'        },
+  brilliant:   { symbol: '!!',   className: 'text-teal-300',   title: 'Brilliancy'       },
+  mistake:     { symbol: '?',    className: 'text-orange-400', title: 'Mistake'          },
+  blunder:     { symbol: '??',   className: 'text-red-400',    title: 'Blunder'          },
+  missed_book: { symbol: '📖?',  className: 'text-amber-400',  title: 'Missed book move' },
 };
 
 function formatScore(score?: number): string {
