@@ -18,7 +18,7 @@ async function fetchGamePgn(id: string) {
 }
 
 async function fetchGamesList(openingId?: number, color?: string) {
-  let sql = 'SELECT id, white_name, black_name, result, played_date, user_color, move_count FROM games WHERE 1=1';
+  let sql = 'SELECT id, white_name, black_name, result, played_date, user_color, move_count, white_elo, black_elo FROM games WHERE 1=1';
   const args: any[] = [];
   if (openingId !== undefined) {
     sql += ' AND opening_id = ?';
@@ -70,22 +70,40 @@ function parseHeaders(headers: Record<string, string | null | undefined>) {
   const result = headers['Result'] || '*';
   const playedDate = headers['Date'] || 'Unknown';
   const userColor = isUserBlack(black) ? 'b' : 'w';
-  return { white, black, result, playedDate, userColor };
+  const whiteElo = headers['WhiteElo'] ? parseInt(headers['WhiteElo'], 10) : null;
+  const blackElo = headers['BlackElo'] ? parseInt(headers['BlackElo'], 10) : null;
+  return { white, black, result, playedDate, userColor, whiteElo, blackElo };
 }
 
 function parseGameDetails(pgn: string) {
   const chess = new Chess();
   chess.loadPgn(preprocessPgn(pgn).trim());
   const details = parseHeaders(chess.header());
-  return { ...details, moveCount: Math.ceil(chess.history().length / 2) };
+  return { ...details, moveCount: Math.ceil(chess.history().length / 2), chess };
+}
+
+async function findMatchedOpeningId(chess: Chess): Promise<number | null> {
+  const rs = await turso.execute('SELECT id, moves_uci FROM openings');
+  const openings = rs.rows.map(r => ({ id: Number(r.id), movesUci: String(r.moves_uci) }));
+  openings.sort((a, b) => b.movesUci.length - a.movesUci.length);
+  
+  const history = chess.history({ verbose: true });
+  const gameMovesUci = history.map(m => m.from + m.to + (m.promotion || '')).join(' ');
+  
+  for (const op of openings) {
+    if (gameMovesUci.startsWith(op.movesUci)) {
+      return op.id;
+    }
+  }
+  return null;
 }
 
 async function insertGame(pgn: string, hash: string, d: any) {
   const sql = `
-    INSERT INTO games (pgn, pgn_hash, move_count, white_name, black_name, result, played_date, user_color, source, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'import', datetime('now'))
+    INSERT INTO games (pgn, pgn_hash, move_count, white_name, black_name, result, played_date, user_color, source, created_at, white_elo, black_elo, opening_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'import', datetime('now'), ?, ?, ?)
   `;
-  const args = [pgn, hash, d.moveCount, d.white, d.black, d.result, d.playedDate, d.userColor];
+  const args = [pgn, hash, d.moveCount, d.white, d.black, d.result, d.playedDate, d.userColor, d.whiteElo, d.blackElo, d.openingId];
   await turso.execute({ sql, args });
 }
 
@@ -133,7 +151,8 @@ async function handleImport(pgn: string) {
   const existingId = await fetchGameIdByHash(hash);
   if (existingId) return { success: true, duplicate: true, id: existingId };
   const d = parseGameDetails(pgn);
-  await insertGame(pgn, hash, d);
+  const openingId = await findMatchedOpeningId(d.chess);
+  await insertGame(pgn, hash, { ...d, openingId });
   const newId = await fetchGameIdByHash(hash);
   if (!newId) throw new Error('Failed to retrieve game ID after insert');
   await indexGameMoves(newId, pgn, d.result, d.userColor);

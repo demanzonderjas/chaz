@@ -84,7 +84,30 @@ const GameCard = ({ game, onClick, onDelete }: any) => {
   return (
     <div onClick={onClick} className="p-3 mb-2 rounded bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/80 cursor-pointer transition-all">
       <GameHeader date={game.played_date} moves={game.move_count} onDelete={onDelete} />
-      <div className="text-sm font-semibold text-zinc-200 truncate pr-6">{game.white_name} vs {game.black_name}</div>
+      <div className="space-y-1.5 my-2">
+        <div className="flex justify-between items-center text-xs text-zinc-300">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[10px] shrink-0 text-zinc-500">⚪</span>
+            <span className="truncate font-semibold text-zinc-200">{game.white_name}</span>
+          </div>
+          {game.white_elo && (
+            <span className="text-[10px] text-zinc-500 font-mono font-bold bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800/80 ml-2 shrink-0 select-none">
+              {game.white_elo}
+            </span>
+          )}
+        </div>
+        <div className="flex justify-between items-center text-xs text-zinc-300">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[10px] shrink-0 text-zinc-500">⚫</span>
+            <span className="truncate font-semibold text-zinc-200">{game.black_name}</span>
+          </div>
+          {game.black_elo && (
+            <span className="text-[10px] text-zinc-500 font-mono font-bold bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800/80 ml-2 shrink-0 select-none">
+              {game.black_elo}
+            </span>
+          )}
+        </div>
+      </div>
       <GameTags outcome={outcome} result={game.result} outcomeStyles={getOutcomeStyles(outcome)} color={game.user_color} />
     </div>
   );

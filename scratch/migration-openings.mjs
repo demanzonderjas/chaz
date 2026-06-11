@@ -18,6 +18,7 @@ const DEFINED_OPENINGS = [
   { name: 'Alekhine Defence', moves: ['e2e4', 'g8f6'] },
   { name: 'Pirc Defence', moves: ['e2e4', 'd7d6'] },
   { name: 'Modern Defence', moves: ['e2e4', 'g7g6'] },
+  { name: 'Petrov\'s Defence', moves: ['e2e4', 'e7e5', 'g1f3', 'g8f6'] },
   { name: 'Ruy Lopez', moves: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1b5'] },
   { name: 'Italian Game', moves: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1c4'] },
   { name: 'London System', moves: ['d2d4', 'd7d5', 'g1f3', 'g8f6', 'c1f4'] },

@@ -32,6 +32,8 @@ interface GameMeta {
   black: string;
   result: string;
   date: string;
+  whiteElo?: number | null;
+  blackElo?: number | null;
 }
 
 function getResultStyle(res: string) {
@@ -43,7 +45,11 @@ function getResultStyle(res: string) {
 const ActiveGameHeader = ({ game, onClear, relevantBookLine, onExploreBookLine }: any) => (
   <div className="flex items-center justify-between px-6 py-2.5 bg-zinc-900/60 border-b border-zinc-800 backdrop-blur-md shrink-0">
     <div className="flex items-center gap-4 flex-wrap">
-      <span className="text-sm font-semibold text-zinc-100 flex items-center gap-2">⚪ {game.white} <span className="text-zinc-500 font-light">vs</span> ⚫ {game.black}</span>
+      <span className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+        ⚪ {game.white}{game.whiteElo ? ` (${game.whiteElo})` : ''}{' '}
+        <span className="text-zinc-500 font-light">vs</span>{' '}
+        ⚫ {game.black}{game.blackElo ? ` (${game.blackElo})` : ''}
+      </span>
       <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${getResultStyle(game.result)}`}>{game.result}</span>
       <span className="text-xs text-zinc-500">📅 {game.date}</span>
       {relevantBookLine && (
@@ -263,6 +269,7 @@ export function ChessAnalysis() {
     resetAnalysis();
     analyzeGame(entries, sf, getPlayerOrientation(pgn));
     importGameData(pgn, id);
+    setMode('analysis');
   }, [analyzeGame, resetAnalysis, unloadGame, importGameData]);
 
   const loadGameFromPuzzle = useCallback((pgn: string, startFen: string, id?: number) => {
@@ -775,7 +782,11 @@ function parseGameMeta(pgn: string): GameMeta {
   chess.loadPgn(preprocessPgn(pgn).trim());
   const h = chess.header();
   const white = h.White || 'Unknown', black = h.Black || 'Unknown';
-  return { white, black, result: h.Result || '*', date: h.Date || 'Unknown' };
+  const whiteEloRaw = h.WhiteElo ? parseInt(h.WhiteElo, 10) : null;
+  const blackEloRaw = h.BlackElo ? parseInt(h.BlackElo, 10) : null;
+  const whiteElo = whiteEloRaw && !isNaN(whiteEloRaw) ? whiteEloRaw : null;
+  const blackElo = blackEloRaw && !isNaN(blackEloRaw) ? blackEloRaw : null;
+  return { white, black, result: h.Result || '*', date: h.Date || 'Unknown', whiteElo, blackElo };
 }
 
 function setupGameMeta(pgn: string, setOrientation: any, setActiveGame: any, id?: number) {
