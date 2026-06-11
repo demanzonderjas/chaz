@@ -86,12 +86,13 @@ class StockfishScheduler {
   private setReadyState(val: boolean) {
     this.ready = val;
     this.notifyReady();
+    if (val) this.runNext();
   }
 
   private handleMessage(line: string) {
     if (!line) return;
     if (line === 'uciok') this.worker?.postMessage('isready');
-    if (line === 'readyok') this.setReadyState(true);
+    if (line === 'readyok') this.handleReadyOk();
     if (line.startsWith('info')) this.handleInfo(line);
     if (line.startsWith('bestmove')) this.handleBestmove(line);
   }
@@ -231,7 +232,7 @@ class StockfishScheduler {
   }
 
   private async runNext() {
-    if (this.isSearching || this.pendingStops > 0 || this.checkingCache) return;
+    if (!this.ready || this.isSearching || this.pendingStops > 0 || this.checkingCache) return;
     if (this.liveTask) {
       await this.runLiveTask(this.liveTask);
       return;
@@ -305,81 +306,81 @@ class StockfishScheduler {
     }
   }
 
+  private async handleReadyOk() {
+    try {
+      const d = await this.runBenchmark('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+      this.lastAnalysisDepth = this.getTargetDepth(d);
+    } catch {
+      this.lastAnalysisDepth = 14;
+    }
+    this.setReadyState(true);
+  }
+
+  private getTargetDepth(d: number): number {
+    if (d <= 12) return 12;
+    if (d === 13 || d === 14) return 14;
+    if (d === 15) return 16;
+    if (d === 16) return 18;
+    return 20;
+  }
+
   public runBenchmark(fen: string): Promise<number> {
     return new Promise((resolve) => {
-      if (!this.worker || !this.ready) {
-        resolve(14); // fallback default depth
-        return;
-      }
-
-      let maxDepthReached = 0;
-      const prevOnMessage = this.worker.onmessage;
-
-      this.worker.onmessage = (e) => {
-        const line = e.data;
-        if (line && line.startsWith('info')) {
-          const depthMatch = line.match(/depth (\d+)/);
-          if (depthMatch) {
-            const d = parseInt(depthMatch[1]);
-            if (d > maxDepthReached) maxDepthReached = d;
-          }
-        }
-        if (line && line.startsWith('bestmove')) {
-          if (this.worker) this.worker.onmessage = prevOnMessage;
-          resolve(maxDepthReached);
-        }
-      };
-
-      this.worker.postMessage('stop');
-      this.worker.postMessage(`position fen ${fen}`);
-      this.worker.postMessage('go movetime 250');
+      this.executeBenchmark(fen, resolve);
     });
+  }
+
+  private executeBenchmark(fen: string, resolve: (d: number) => void) {
+    if (!this.worker) return resolve(14);
+    const prev = this.worker.onmessage;
+    const timer = setTimeout(() => this.finishBenchmark(prev, 14, resolve), 1000);
+    this.worker.onmessage = this.getBenchmarkHandler(prev, timer, resolve);
+    this.worker.postMessage('stop');
+    this.worker.postMessage(`position fen ${fen}`);
+    this.worker.postMessage('go movetime 250');
+  }
+
+  private getBenchmarkHandler(prev: any, timer: any, resolve: (d: number) => void) {
+    let max = 0;
+    return (e: MessageEvent) => {
+      const line = e.data || '';
+      max = Math.max(max, parseInt(line.match(/depth (\d+)/)?.[1] ?? '0'));
+      if (!line.startsWith('bestmove')) return;
+      clearTimeout(timer);
+      this.finishBenchmark(prev, max, resolve);
+    };
+  }
+
+  private finishBenchmark(prev: any, depth: number, resolve: (d: number) => void) {
+    if (this.worker) this.worker.onmessage = prev;
+    resolve(depth);
   }
 
   public async addAnnotationTasks(tasks: AnnotationTask[]) {
     this.stopCurrentSearch();
     this.annotationQueue = [...tasks];
     this.totalAnnotationTasks = tasks.length;
+    this.localCache = {};
+    if (tasks.length > 0) await this.initAnnotationTasks(tasks);
+    this.runNext();
+  }
 
-    if (tasks.length > 0) {
-      this.checkingCache = true;
-      try {
-        const startFen = tasks[0].fen;
-        const benchmarkDepth = await this.runBenchmark(startFen);
-        
-        let targetDepth = 14;
-        if (benchmarkDepth <= 12) {
-          targetDepth = 12;
-        } else if (benchmarkDepth === 13 || benchmarkDepth === 14) {
-          targetDepth = 14;
-        } else if (benchmarkDepth === 15) {
-          targetDepth = 16;
-        } else if (benchmarkDepth === 16) {
-          targetDepth = 18;
-        } else {
-          targetDepth = 20;
-        }
+  private async initAnnotationTasks(tasks: AnnotationTask[]) {
+    this.checkingCache = true;
+    const depth = this.lastAnalysisDepth ?? 14;
+    this.annotationQueue.forEach((t) => { t.depth = depth; });
+    await this.fetchAndSetCache(tasks, depth);
+    this.checkingCache = false;
+  }
 
-        this.lastAnalysisDepth = targetDepth;
-        console.log(`Benchmark completed. Depth reached: ${benchmarkDepth}. Selected target depth: ${targetDepth}`);
-
-        this.annotationQueue.forEach((t) => {
-          t.depth = targetDepth;
-        });
-
-        const fens = tasks.map((t) => t.fen);
-        this.localCache = await this.batchCheckCache(fens, targetDepth);
-      } catch (e) {
-        console.error('Failed to batch check cache or run benchmark', e);
-        this.localCache = {};
-      } finally {
-        this.checkingCache = false;
-      }
-    } else {
+  private async fetchAndSetCache(tasks: AnnotationTask[], depth: number) {
+    try {
+      const fens = tasks.map((t) => t.fen);
+      this.localCache = await this.batchCheckCache(fens, depth);
+    } catch (e) {
+      console.error('Failed to batch check cache', e);
       this.localCache = {};
     }
-
-    this.runNext();
   }
 
   public clearAnnotationQueue() {
