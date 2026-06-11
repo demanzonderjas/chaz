@@ -79,7 +79,7 @@ export function ChessAnalysis() {
   const [explorerMoveIdx, setExplorerMoveIdx] = useState<number>(-1);
 
   const { ready, evaluation, analyse } = useStockfish();
-  const { annotations, analyzing, progress, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
+  const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
   const currentFen = cursor < 0 ? initialFen : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
@@ -95,9 +95,9 @@ export function ChessAnalysis() {
   const { moves: bookMoves, inBook } = useBookMoves(boardFen);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || analyzing) return;
     analyse(boardFen, boardColor, 16);
-  }, [ready, boardFen, boardColor, analyse]);
+  }, [ready, boardFen, boardColor, analyse, analyzing]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -381,6 +381,11 @@ export function ChessAnalysis() {
               </span>
             ) : annotations.length > 0 ? (
               <>
+                {analysisDepth && (
+                  <span className="text-xs px-2.5 py-1 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">
+                    depth {analysisDepth}
+                  </span>
+                )}
                 <button onClick={startPracticeMode} disabled={loadingGameMistakes}
                   className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50">
                   {loadingGameMistakes ? 'Loading...' : '🧩 Practice Mistakes'}

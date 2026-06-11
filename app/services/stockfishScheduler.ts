@@ -51,6 +51,8 @@ class StockfishScheduler {
   private onProgressCallback: ((completed: number, total: number) => void) | null = null;
   private onFinishedCallback: (() => void) | null = null;
   private totalAnnotationTasks = 0;
+  private localCache: Record<string, { cached: boolean; result: any }> = {};
+  private lastAnalysisDepth: number | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -66,6 +68,10 @@ class StockfishScheduler {
 
   public isReady() {
     return this.ready;
+  }
+
+  public getAnalysisDepth(): number | null {
+    return this.lastAnalysisDepth;
   }
 
   public onReadyChange(callback: (ready: boolean) => void) {
@@ -283,10 +289,96 @@ class StockfishScheduler {
     this.onProgressCallback(completed, this.totalAnnotationTasks);
   }
 
-  public addAnnotationTasks(tasks: AnnotationTask[]) {
+  private async batchCheckCache(fens: string[], depth: number): Promise<Record<string, { cached: boolean; result: any }>> {
+    if (fens.length === 0) return {};
+    try {
+      const body = JSON.stringify({ fens, depth });
+      const res = await fetch('/api/analysis/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body
+      });
+      const data = res.ok ? await res.json() : null;
+      return data?.results || {};
+    } catch {
+      return {};
+    }
+  }
+
+  public runBenchmark(fen: string): Promise<number> {
+    return new Promise((resolve) => {
+      if (!this.worker || !this.ready) {
+        resolve(14); // fallback default depth
+        return;
+      }
+
+      let maxDepthReached = 0;
+      const prevOnMessage = this.worker.onmessage;
+
+      this.worker.onmessage = (e) => {
+        const line = e.data;
+        if (line && line.startsWith('info')) {
+          const depthMatch = line.match(/depth (\d+)/);
+          if (depthMatch) {
+            const d = parseInt(depthMatch[1]);
+            if (d > maxDepthReached) maxDepthReached = d;
+          }
+        }
+        if (line && line.startsWith('bestmove')) {
+          if (this.worker) this.worker.onmessage = prevOnMessage;
+          resolve(maxDepthReached);
+        }
+      };
+
+      this.worker.postMessage('stop');
+      this.worker.postMessage(`position fen ${fen}`);
+      this.worker.postMessage('go movetime 250');
+    });
+  }
+
+  public async addAnnotationTasks(tasks: AnnotationTask[]) {
     this.stopCurrentSearch();
     this.annotationQueue = [...tasks];
     this.totalAnnotationTasks = tasks.length;
+
+    if (tasks.length > 0) {
+      this.checkingCache = true;
+      try {
+        const startFen = tasks[0].fen;
+        const benchmarkDepth = await this.runBenchmark(startFen);
+        
+        let targetDepth = 14;
+        if (benchmarkDepth <= 12) {
+          targetDepth = 12;
+        } else if (benchmarkDepth === 13 || benchmarkDepth === 14) {
+          targetDepth = 14;
+        } else if (benchmarkDepth === 15) {
+          targetDepth = 16;
+        } else if (benchmarkDepth === 16) {
+          targetDepth = 18;
+        } else {
+          targetDepth = 20;
+        }
+
+        this.lastAnalysisDepth = targetDepth;
+        console.log(`Benchmark completed. Depth reached: ${benchmarkDepth}. Selected target depth: ${targetDepth}`);
+
+        this.annotationQueue.forEach((t) => {
+          t.depth = targetDepth;
+        });
+
+        const fens = tasks.map((t) => t.fen);
+        this.localCache = await this.batchCheckCache(fens, targetDepth);
+      } catch (e) {
+        console.error('Failed to batch check cache or run benchmark', e);
+        this.localCache = {};
+      } finally {
+        this.checkingCache = false;
+      }
+    } else {
+      this.localCache = {};
+    }
+
     this.runNext();
   }
 
@@ -297,6 +389,7 @@ class StockfishScheduler {
     this.activeAnnotation = null;
     this.onProgressCallback = null;
     this.onFinishedCallback = null;
+    this.lastAnalysisDepth = null;
   }
 
   public registerCallbacks(
@@ -314,6 +407,10 @@ class StockfishScheduler {
   }
 
   private async checkCache(fen: string, depth: number, color: 'w' | 'b'): Promise<EvalResult | null> {
+    const cached = this.localCache[fen];
+    if (cached) {
+      return cached.cached ? this.mapCachedResult(cached.result, color) : null;
+    }
     try {
       const res = await fetch(`/api/analysis?fen=${encodeURIComponent(fen)}&depth=${depth}`);
       const data = res.ok ? await res.json() : null;

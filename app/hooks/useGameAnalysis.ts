@@ -22,6 +22,7 @@ interface AnalysisContext {
   setAnalyzing: (val: boolean) => void;
   setProgress: (val: number) => void;
   scoresRef: React.MutableRefObject<Record<number, number>>;
+  setAnalysisDepth: (val: number | null) => void;
 }
 
 async function fetchBookData(positions: { fen: string; san: string }[]) {
@@ -89,7 +90,10 @@ const createAnnotationTasks = (ctx: AnalysisContext, fens: string[]) =>
 const registerSchedulerCallbacks = (ctx: AnalysisContext) => {
   stockfishScheduler.registerCallbacks(
     (comp, tot) => ctx.setProgress(Math.round((comp / tot) * 100)),
-    () => ctx.setAnalyzing(false)
+    () => {
+      ctx.setAnalyzing(false);
+      ctx.setAnalysisDepth(stockfishScheduler.getAnalysisDepth());
+    }
   );
 };
 
@@ -162,15 +166,17 @@ const resetGameAnalysis = (ctx: AnalysisContext) => {
   ctx.setAnnotations([]);
   ctx.setProgress(0);
   ctx.setAnalyzing(false);
+  ctx.setAnalysisDepth(null);
 };
 
 export function useGameAnalysis() {
   const [annotations, setAnnotations] = useState<MoveAnnotation[]>([]);
   const [analyzing, setAnalyzing] = useState(false), [progress, setProgress] = useState(0);
+  const [analysisDepth, setAnalysisDepth] = useState<number | null>(null);
   const scoresRef = useRef<Record<number, number>>({});
-  const ctx = { setAnnotations, setAnalyzing, setProgress, scoresRef };
+  const ctx = { setAnnotations, setAnalyzing, setProgress, scoresRef, setAnalysisDepth };
   const analyzeGame = useCallback((h: HistoryEntry[], sf?: string, pc?: 'white' | 'black') => analyzeGameImpl(ctx, h, sf, pc), []);
   const analyzeLastMove = useCallback((h: HistoryEntry[], sf?: string, pc?: 'white' | 'black') => analyzeLastMoveImpl(ctx, h, sf, pc), []);
   const reset = useCallback(() => resetGameAnalysis(ctx), []);
-  return { annotations, analyzing, progress, analyzeGame, analyzeLastMove, reset };
+  return { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset };
 }
