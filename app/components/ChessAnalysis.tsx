@@ -236,8 +236,7 @@ export function ChessAnalysis() {
     if (!m) return;
     if (!baseState) setBaseState({ history, cursor });
     const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
-    setHistory(next);
-    setCursor(next.length - 1);
+    setHistory(next); setCursor(next.length - 1); playMoveSound(m.san.includes('x'));
     setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
   }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState, orientation]);
 
@@ -300,6 +299,7 @@ export function ChessAnalysis() {
     const newEntries = buildVariationEntries(currentFen, line.pv);
     setHistory([...history.slice(0, cursor + 1), ...newEntries]);
     setCursor(cursor + 1);
+    if (newEntries[0]) playMoveSound(newEntries[0].san.includes('x'));
   }, [baseState, history, cursor, currentFen]);
 
   const exitVariation = useCallback(() => {
@@ -874,7 +874,7 @@ function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory:
     setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
     return next;
   });
-  setCursor((c: number) => c + 1);
+  setCursor((c: number) => c + 1); playMoveSound(entry.san.includes('x'));
 }
 
 const AnnotationBadge = ({ type }: { type: string }) => {
