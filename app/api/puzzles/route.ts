@@ -46,7 +46,7 @@ function getDateDaysAgo(days: number): string {
 }
 
 function buildPuzzleSql(openingId?: number, color?: string, days?: number): { sql: string; args: any[] } {
-  let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ?`;
+  let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes, s.last_result FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ?`;
   const args: any[] = [];
   if (openingId !== undefined) { sql += ` AND g.opening_id = ?`; args.push(openingId); }
   if (color !== undefined) { sql += ` AND g.user_color = ?`; args.push(color); }
@@ -59,7 +59,7 @@ function computeWeights(pool: any[]) {
   const N = pool.length;
   let total = 0;
   const items = pool.map((r, i) => {
-    const w = (1 + Number(r.mistakes || 0) * 5) * (N - i);
+    const w = (1 + Number(r.mistakes || 0) * 5) * (r.last_result === 'success' ? 0.02 : 1) * (N - i);
     total += w;
     return { r, w };
   });
@@ -338,23 +338,26 @@ async function fetchBookPuzzle(openingId?: number, color?: string, days?: number
 
     // Query mistake stats for candidate FENs
     const fenList = pool.map(c => c.fen);
-    const statMap: Record<string, number> = {};
+    const statMap: Record<string, { mistakes: number; lastResult: string | null }> = {};
     if (fenList.length > 0) {
       const pFs = fenList.map(() => '?').join(',');
       const statRs = await turso.execute({
-        sql: `SELECT start_fen, mistakes FROM puzzle_stats WHERE start_fen IN (${pFs})`,
+        sql: `SELECT start_fen, mistakes, last_result FROM puzzle_stats WHERE start_fen IN (${pFs})`,
         args: fenList
       });
       statRs.rows.forEach(r => {
-        statMap[String(r.start_fen)] = Number(r.mistakes || 0);
+        statMap[String(r.start_fen)] = {
+          mistakes: Number(r.mistakes || 0),
+          lastResult: r.last_result ? String(r.last_result) : null
+        };
       });
     }
 
     // Weighted random selection: favor deeper book positions and mistake positions
     let totalWeight = 0;
     const poolWithWeights = pool.map(c => {
-      const mistakes = statMap[c.fen] || 0;
-      const weight = (c.ply * c.ply) * (1 + mistakes * 5);
+      const stats = statMap[c.fen] || { mistakes: 0, lastResult: null };
+      const weight = (c.ply * c.ply) * (1 + stats.mistakes * 5) * (stats.lastResult === 'success' ? 0.02 : 1);
       totalWeight += weight;
       return { c, weight };
     });
@@ -481,30 +484,34 @@ async function fetchCachedAnalysis(fens: string[]) {
 }
 
 async function fetchPuzzleStatsForFens(fens: string[]) {
-  if (fens.length === 0) return new Map<string, number>();
-  const sql = `SELECT start_fen, mistakes FROM puzzle_stats WHERE start_fen IN (${fens.map(() => '?').join(',')})`;
+  if (fens.length === 0) return new Map<string, any>();
+  const placeholders = fens.map(() => '?').join(',');
+  const sql = `SELECT start_fen, mistakes, last_result FROM puzzle_stats WHERE start_fen IN (${placeholders})`;
   const rs = await turso.execute({ sql, args: fens });
-  const map = new Map<string, number>();
-  rs.rows.forEach(r => map.set(String(r.start_fen), Number(r.mistakes || 0)));
+  const map = new Map<string, any>();
+  rs.rows.forEach(r => map.set(String(r.start_fen), { mistakes: Number(r.mistakes || 0), lastResult: r.last_result }));
   return map;
 }
 
-const mapCandidate = (r: any, pm: any, ev: any, statsMap: Map<string, number>) => ({
-  fen: String(r.fen_norm), playedUci: String(pm.uci), playedSan: String(pm.san),
-  engineBestMove: ev.bestMove, wins: Number(pm.wins || 0), draws: Number(pm.draws || 0),
-  losses: Number(pm.losses || 0), gameId: Number(pm.game_id), evalData: ev,
-  mistakes: statsMap.get(String(r.fen_norm)) || 0, pgn: String(pm.pgn),
-  whiteName: String(pm.white_name), blackName: String(pm.black_name), playedDate: String(pm.played_date)
-});
+function mapCandidate(r: any, pm: any, ev: any, statsMap: Map<string, any>) {
+  const s = statsMap.get(String(r.fen_norm)) || { mistakes: 0, lastResult: null };
+  return {
+    fen: String(r.fen_norm), playedUci: String(pm.uci), playedSan: String(pm.san),
+    engineBestMove: ev.bestMove, wins: Number(pm.wins || 0), draws: Number(pm.draws || 0),
+    losses: Number(pm.losses || 0), gameId: Number(pm.game_id), evalData: ev,
+    mistakes: s.mistakes, lastResult: s.lastResult, pgn: String(pm.pgn),
+    whiteName: String(pm.white_name), blackName: String(pm.black_name), playedDate: String(pm.played_date)
+  };
+}
 
-function buildWeaknessCandidates(analysisRows: any[], fenMap: Map<string, any>, statsMap: Map<string, number>) {
+function buildWeaknessCandidates(analysisRows: any[], fenMap: Map<string, any>, statsMap: Map<string, any>) {
   return analysisRows.map(r => {
     const pm = fenMap.get(String(r.fen_norm)), ev = JSON.parse(r.result_json as string);
     return pm && ev.bestMove && ev.bestMove !== String(pm.uci) ? mapCandidate(r, pm, ev, statsMap) : null;
   }).filter(Boolean) as any[];
 }
 
-const getCandidateWeight = (c: any) => Math.max(1, c.losses - c.wins) * (1 + c.mistakes * 5);
+const getCandidateWeight = (c: any) => Math.max(1, c.losses - c.wins) * (1 + c.mistakes * 5) * (c.lastResult === 'success' ? 0.02 : 1);
 
 function chooseWeightedCandidate(candidates: any[]) {
   const weights = candidates.map(getCandidateWeight);

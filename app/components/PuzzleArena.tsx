@@ -437,7 +437,7 @@ const PUZZLE_TYPES = [
 ] as const;
 
 export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoadGame?: (pgn: string, startFen: string, gameId: number) => void }) {
-  const [puzzleType, setPuzzleType] = useState<PuzzleType>('tactical');
+  const [puzzleType, setPuzzleType] = useState<PuzzleType>('winning_position');
   const [puzzle, setPuzzle] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [blunderEvaluation, setBlunderEvaluation] = useState<any>(null);
@@ -449,7 +449,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [attemptReported, setAttemptReported] = useState(false);
   const [openings, setOpenings] = useState<{ id: number; name: string; color: string; game_count: number }[]>([]);
   const [selectedOpening, setSelectedOpening] = useState<string>('all');
-  const [selectedRecency, setSelectedRecency] = useState<string>('all');
+  const [selectedRecency, setSelectedRecency] = useState<string>('7');
 
   const [fetchKey, setFetchKey] = useState(0);
 
