@@ -97,19 +97,29 @@ const registerSchedulerCallbacks = (ctx: AnalysisContext) => {
   );
 };
 
-const getIsMissedBook = (i: number, hasBook: boolean, hasOptions: boolean, playerColor?: 'white' | 'black') => {
-  const isPlayer = playerColor === undefined || i % 2 === (playerColor === 'white' ? 0 : 1);
-  return isPlayer && !hasBook && hasOptions;
-};
+function getFirstOppDev(history: HistoryEntry[], data: any, playerColor?: 'white' | 'black') {
+  return history.findIndex((_, i) => {
+    const isPlayer = playerColor === undefined || i % 2 === (playerColor === 'white' ? 0 : 1);
+    return !isPlayer && !data.book.has(i) && data.options.has(i);
+  });
+}
+
+function buildBookAnnotations(history: HistoryEntry[], data: any, firstOppDev: number, playerColor?: 'white' | 'black') {
+  return history.map((h, i) => {
+    const isPlayer = playerColor === undefined || i % 2 === (playerColor === 'white' ? 0 : 1);
+    return {
+      types: data.book.has(i) ? (['book'] as AnnotationType[]) : [],
+      isMissedBook: isPlayer ? (!data.book.has(i) && data.options.has(i)) : (i === firstOppDev),
+      isCheckmate: h.san.endsWith('#'),
+    };
+  });
+}
 
 const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN, playerColor?: 'white' | 'black') => {
   const positions = history.map((h, i) => ({ fen: i === 0 ? startFen : history[i - 1].fen, san: h.san }));
   const data = await fetchBookData(positions);
-  ctx.setAnnotations(history.map((h, i) => ({
-    types: data.book.has(i) ? (['book'] as AnnotationType[]) : [],
-    isMissedBook: getIsMissedBook(i, data.book.has(i), data.options.has(i), playerColor),
-    isCheckmate: h.san.endsWith('#'),
-  })));
+  const firstOppDev = getFirstOppDev(history, data, playerColor);
+  ctx.setAnnotations(buildBookAnnotations(history, data, firstOppDev, playerColor));
 };
 
 export const analyzeGameImpl = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN, playerColor?: 'white' | 'black') => {
@@ -145,9 +155,16 @@ const queueMoveEvaluation = (ctx: AnalysisContext, i: number, before: string, af
   }
 };
 
-const buildLastMoveEntry = (h: HistoryEntry, hasBook: boolean, hasOptions: boolean, isPlayer: boolean) => ({
+function hasPrevOpponentDev(prev: MoveAnnotation[], playerColor?: 'white' | 'black') {
+  return prev.some((ann, idx) => {
+    const isOppIdx = playerColor === undefined || idx % 2 === (playerColor === 'white' ? 1 : 0);
+    return isOppIdx && ann.isMissedBook;
+  });
+}
+
+const buildLastMoveEntry = (h: HistoryEntry, hasBook: boolean, hasOptions: boolean, isPlayer: boolean, hasPrevOppDev: boolean) => ({
   types: hasBook ? ['book'] as AnnotationType[] : [],
-  isMissedBook: isPlayer && !hasBook && hasOptions,
+  isMissedBook: isPlayer ? (!hasBook && hasOptions) : (!hasBook && hasOptions && !hasPrevOppDev),
   isCheckmate: h.san.endsWith('#'),
 });
 
@@ -155,9 +172,10 @@ export const analyzeLastMoveImpl = async (ctx: AnalysisContext, history: History
   if (!history.length) return;
   const i = history.length - 1, before = i === 0 ? startFen : history[i - 1].fen;
   const data = await fetchBookData([{ fen: before, san: history[i].san }]);
-  const isPlayer = playerColor === undefined || i % 2 === (playerColor === 'white' ? 0 : 1);
-  const entry = buildLastMoveEntry(history[i], data.book.has(0), data.options.has(0), isPlayer);
-  ctx.setAnnotations((prev) => Object.assign([...prev], { [i]: entry }));
+  const isPl = playerColor === undefined || i % 2 === (playerColor === 'white' ? 0 : 1);
+  ctx.setAnnotations((prev) => Object.assign([...prev], {
+    [i]: buildLastMoveEntry(history[i], data.book.has(0), data.options.has(0), isPl, hasPrevOpponentDev(prev, playerColor))
+  }));
   queueMoveEvaluation(ctx, i, before, history[i].fen);
 };
 

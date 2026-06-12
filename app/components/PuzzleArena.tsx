@@ -207,7 +207,7 @@ function moveSafe(chess: Chess, m: string) {
 }
 
 function getBestLineMoves(puzzle: any, evaluation: any): { san: string; fen: string }[] {
-  const pv = evaluation?.pv || [];
+  const pv = evaluation?.pv || evaluation?.candidates?.[0]?.pv || evaluation?.lines?.[0]?.pv || [];
   if (!pv.length || !puzzle?.start_fen) return [];
   const chess = new Chess(puzzle.start_fen);
   return pv.slice(0, 14).map((m: string) => moveSafe(chess, m)).filter(Boolean) as any;

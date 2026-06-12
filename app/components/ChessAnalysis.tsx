@@ -294,8 +294,9 @@ export function ChessAnalysis() {
   }, [pgnInput, loadRawPgn]);
 
   const enterVariation = useCallback((line: any) => {
-    if (baseState) return;
-    setBaseState({ history, cursor });
+    if (!baseState) {
+      setBaseState({ history, cursor });
+    }
     const newEntries = buildVariationEntries(currentFen, line.pv);
     setHistory([...history.slice(0, cursor + 1), ...newEntries]);
     setCursor(cursor + 1);
