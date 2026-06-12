@@ -869,14 +869,13 @@ async function fetchBookMovesForFens(fens: string[]): Promise<Set<string>> {
 }
 
 async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string, bookMoves: Set<string>) {
+  if (history[i].san.endsWith('#')) return false;
   const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]], isWhite = normFens[i].split(' ')[1] === 'w';
   if (!isBlunder(eb, ea, isWhite, i)) return false;
   const isOpp = (isWhite ? 'w' : 'b') !== uUserColor, start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
-  if (!bestUci) return false;
-  const blunder = history[i].from + history[i].to + (history[i].promotion || '');
-  if (bookMoves.has(`${normalizeBookFen(fens[i])}|${blunder}`)) return false;
+  if (!bestUci || bookMoves.has(`${normalizeBookFen(fens[i])}|${history[i].from}${history[i].to}${history[i].promotion || ''}`)) return false;
   const zw = await handleZw(game, start, bestUci, isOpp ? ea : eb, isOpp ? history[i] : (history[i - 1] || null), uUserColor);
-  return zw !== null ? zw : await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, blunder, history[i].san, uUserColor);
+  return zw !== null ? zw : await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, history[i].from + history[i].to + (history[i].promotion || ''), history[i].san, uUserColor);
 }
 
 async function scanGame(gameId: number) {
