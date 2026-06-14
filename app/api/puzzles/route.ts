@@ -46,7 +46,7 @@ function getDateDaysAgo(days: number): string {
 }
 
 function buildPuzzleSql(openingId?: number, color?: string, days?: number): { sql: string; args: any[] } {
-  let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes, s.last_result FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ?`;
+  let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes, s.last_result FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ? AND p.solution_uci != '(none)'`;
   const args: any[] = [];
   if (openingId !== undefined) { sql += ` AND g.opening_id = ?`; args.push(openingId); }
   if (color !== undefined) { sql += ` AND g.user_color = ?`; args.push(color); }

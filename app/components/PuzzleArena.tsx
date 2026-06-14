@@ -311,6 +311,9 @@ const ZwischenzugExplanation = ({ evaluation, puzzle }: { evaluation: any; puzzl
 function getScore(ev: any): number | null {
   if (!ev) return null;
   const best = ev.candidates?.[0] ?? ev;
+  if (best.bestMove === '(none)' || best.bestMove === null) {
+    return -10000; // Side to move has no moves (checkmated)
+  }
   if (best.mate !== undefined && best.mate !== null) return best.mate > 0 ? 10000 : -10000;
   return best.cp ?? best.score ?? 0;
 }
@@ -322,9 +325,22 @@ function getScoreLabel(score: number | null): string {
 }
 
 function getDiffText(puzzle: any, bestScore: number, blunderScore: number | null): string {
-  const bestLabel = getScoreLabel(bestScore), blunderLabel = getScoreLabel(blunderScore);
-  const diff = blunderScore !== null && Math.abs(bestScore) < 9000 && Math.abs(blunderScore) < 9000
+  let bestLabel = getScoreLabel(bestScore);
+  let blunderLabel = getScoreLabel(blunderScore);
+
+  if (puzzle.blunder_san?.endsWith('#')) {
+    blunderLabel = 'Mate';
+  }
+  if (puzzle.solution_san?.endsWith('#')) {
+    bestLabel = 'Mate';
+  }
+
+  const isBestMate = (bestScore !== null && Math.abs(bestScore) >= 9000) || puzzle.solution_san?.endsWith('#');
+  const isBlunderMate = (blunderScore !== null && Math.abs(blunderScore) >= 9000) || puzzle.blunder_san?.endsWith('#');
+
+  const diff = blunderScore !== null && !isBestMate && !isBlunderMate
     ? `${((bestScore - blunderScore) / 100).toFixed(2)} pawns` : null;
+
   return `Instead of playing ${puzzle.blunder_san} (${blunderLabel}), the best move was ${puzzle.solution_san} (${bestLabel}).` + (diff ? ` This dropped the evaluation by ${diff}.` : '');
 }
 

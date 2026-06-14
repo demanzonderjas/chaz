@@ -231,6 +231,7 @@ async function run() {
     bmRs.rows.forEach(r => bookMoves.add(`${r.fen_before}|${r.uci}`));
 
     for (let i = 0; i < history.length; i++) {
+      if (history[i].san.endsWith('#')) continue;
       const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]];
       if (!eb || !ea) continue;
 
