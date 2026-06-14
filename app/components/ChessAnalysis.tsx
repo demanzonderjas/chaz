@@ -13,7 +13,7 @@ import { DbExplorer } from './DbExplorer';
 import { GameLibrary } from './GameLibrary';
 import { PuzzleArena } from './PuzzleArena';
 import { GamePuzzleArena } from './GamePuzzleArena';
-import { playMoveSound } from '../services/sound';
+import { playMoveSound, playErrorSound } from '../services/sound';
 import { preprocessPgn, isUserBlack } from '../services/pgn';
 
 
@@ -122,6 +122,7 @@ export function ChessAnalysis() {
   const [quizFeedback, setQuizFeedback] = useState<{ type: 'success' | 'error'; text: string; square?: string } | null>(null);
   const [quizStartFen, setQuizStartFen] = useState<string | null>(null);
   const [isTempSubgroupActive, setIsTempSubgroupActive] = useState<boolean>(false);
+  const [tempWrongFen, setTempWrongFen] = useState<string | null>(null);
 
   // Clear quiz feedback after 1.2 seconds
   useEffect(() => {
@@ -312,6 +313,7 @@ export function ChessAnalysis() {
     }
     setDrawnArrows([]);
     setSaveNoteSuccess(false);
+    setTempWrongFen(null);
   }, [activeBookLine?.id, activeBookMoveIdx]);
 
   const autoSaveAnalysisArrows = async (newDrawn: Arrow[]) => {
@@ -712,6 +714,12 @@ export function ChessAnalysis() {
           const promo = getPromotionPiece(piece.pieceType, targetSquare);
           const userUci = `${sourceSquare}${targetSquare}${promo || ''}`;
 
+          // Validate legality of move
+          const chess = new Chess(boardFen);
+          if (!tryMakeMove(chess, userUci)) {
+            return false;
+          }
+
           if (userUci === expectedMove.uci) {
             setQuizFeedback({ type: 'success', text: 'Correct!', square: targetSquare });
             setActiveBookMoveIdx(nextIdx);
@@ -719,6 +727,7 @@ export function ChessAnalysis() {
             playMoveSound(expectedMove.san.includes('x'));
             return true;
           } else {
+            playErrorSound();
             setQuizFeedback({ type: 'error', text: 'Wrong!', square: targetSquare });
             if (!quizMistakes.includes(nextIdx)) {
               setQuizMistakes(prev => [...prev, nextIdx]);
@@ -732,7 +741,11 @@ export function ChessAnalysis() {
                 })
               }).catch(console.error);
             }
-            return false;
+            setTempWrongFen(chess.fen());
+            setTimeout(() => {
+              setTempWrongFen(null);
+            }, 1000);
+            return true;
           }
         }
 
@@ -748,6 +761,12 @@ export function ChessAnalysis() {
 
           const promo = getPromotionPiece(piece.pieceType, targetSquare);
           const userUci = `${sourceSquare}${targetSquare}${promo || ''}`;
+
+          // Validate legality of move
+          const chess = new Chess(boardFen);
+          if (!tryMakeMove(chess, userUci)) {
+            return false;
+          }
 
           if (userUci === expectedMove.uci) {
             playMoveSound(expectedMove.san.includes('x'));
@@ -778,6 +797,7 @@ export function ChessAnalysis() {
             }
             return true;
           } else {
+            playErrorSound();
             setQuizFeedback({ type: 'error', text: 'Wrong!', square: targetSquare });
             setReviewQueue(prev => prev.map((item, idx) => idx === currentReviewIdx ? { ...item, count: 2 } : item));
             fetch('/api/puzzles/attempt', {
@@ -789,7 +809,11 @@ export function ChessAnalysis() {
                 success: false
               })
             }).catch(console.error);
-            return false;
+            setTempWrongFen(chess.fen());
+            setTimeout(() => {
+              setTempWrongFen(null);
+            }, 1000);
+            return true;
           }
         }
 
@@ -806,7 +830,7 @@ export function ChessAnalysis() {
     },
     [
       mode, activeBookLine, quizMode, quizStatus, activeBookMoveIdx, solvedMoveIdx, quizMistakes, reviewQueue, currentReviewIdx,
-      currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation
+      currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation, boardFen, setTempWrongFen
     ]
   );
 
@@ -1162,7 +1186,7 @@ export function ChessAnalysis() {
             <ChessboardProvider
               key={boardKey}
               options={{
-                position: boardFen,
+                position: tempWrongFen || boardFen,
                 boardOrientation: orientation,
                 arrows: mode === 'book-explorer'
                   ? ((quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx) ? loadedArrows : [])
