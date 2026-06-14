@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard, ChessboardProvider } from 'react-chessboard';
 import { useStockfish } from '../hooks/useStockfish';
@@ -130,6 +130,22 @@ export function ChessAnalysis() {
     : currentColor;
 
   const { moves: bookMoves, inBook } = useBookMoves(boardFen);
+
+  const activeLineIndexAndParent = useMemo(() => {
+    if (!activeBookLine || groupedOpenings.length === 0) return null;
+    for (const op of groupedOpenings) {
+      const idx = op.lines.findIndex((l: any) => l.id === activeBookLine.id);
+      if (idx !== -1) {
+        return {
+          parentOpening: op,
+          index: idx,
+          hasPrev: idx > 0,
+          hasNext: idx < op.lines.length - 1
+        };
+      }
+    }
+    return null;
+  }, [activeBookLine?.id, groupedOpenings]);
 
   useEffect(() => {
     if (!ready || analyzing) return;
@@ -785,19 +801,51 @@ export function ChessAnalysis() {
               {activeBookLine ? (
                 // Active Book Line Detail View
                 <div className="flex-1 flex flex-col overflow-hidden">
-                  <div className="flex items-center gap-2 mb-4 shrink-0">
-                    <button 
-                      onClick={() => {
-                        setActiveBookLine(null);
-                        setActiveBookMoveIdx(-1);
-                      }}
-                      className="text-xs text-zinc-400 hover:text-zinc-205 transition-colors flex items-center gap-1 cursor-pointer bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded"
-                    >
-                      ◀ Back to List
-                    </button>
-                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${activeBookLine.color === 'w' ? 'bg-zinc-850 text-zinc-250 border border-zinc-700' : 'bg-zinc-955 text-zinc-455 border border-zinc-850'}`}>
-                      {activeBookLine.color === 'w' ? 'White' : 'Black'}
-                    </span>
+                  <div className="flex items-center justify-between mb-4 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => {
+                          setActiveBookLine(null);
+                          setActiveBookMoveIdx(-1);
+                        }}
+                        className="text-xs text-zinc-400 hover:text-zinc-205 transition-colors flex items-center gap-1 cursor-pointer bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded"
+                      >
+                        ◀ Back to List
+                      </button>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${activeBookLine.color === 'w' ? 'bg-zinc-850 text-zinc-250 border border-zinc-700' : 'bg-zinc-955 text-zinc-455 border border-zinc-850'}`}>
+                        {activeBookLine.color === 'w' ? 'White' : 'Black'}
+                      </span>
+                    </div>
+
+                    {activeLineIndexAndParent && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          disabled={!activeLineIndexAndParent.hasPrev || loadingDetailId !== null}
+                          onClick={() => {
+                            const prevLine = activeLineIndexAndParent.parentOpening.lines[activeLineIndexAndParent.index - 1];
+                            loadBookLineDetail(prevLine.id);
+                          }}
+                          className="text-xs text-zinc-300 hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded cursor-pointer font-medium"
+                          title="Previous variation in this opening"
+                        >
+                          ◀ Prev Line
+                        </button>
+                        <span className="text-xs text-zinc-500 font-mono">
+                          {activeLineIndexAndParent.index + 1} / {activeLineIndexAndParent.parentOpening.lines.length}
+                        </span>
+                        <button
+                          disabled={!activeLineIndexAndParent.hasNext || loadingDetailId !== null}
+                          onClick={() => {
+                            const nextLine = activeLineIndexAndParent.parentOpening.lines[activeLineIndexAndParent.index + 1];
+                            loadBookLineDetail(nextLine.id);
+                          }}
+                          className="text-xs text-zinc-300 hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded cursor-pointer font-medium"
+                          title="Next variation in this opening"
+                        >
+                          Next Line ▶
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <h2 className="text-md font-bold text-zinc-100 mb-4 flex items-center gap-1 shrink-0">
                     📖 {activeBookLine.name}
