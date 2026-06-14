@@ -834,6 +834,66 @@ export function ChessAnalysis() {
     ]
   );
 
+  const handleShowSolution = useCallback(() => {
+    if (mode !== 'book-explorer' || !activeBookLine || quizStatus !== 'playing') return;
+
+    if (quizMode === 'quiz') {
+      if (activeBookMoveIdx !== solvedMoveIdx) {
+        setQuizFeedback({ type: 'error', text: 'Navigate to the current position to reveal solution!' });
+        return;
+      }
+
+      const nextIdx = activeBookMoveIdx + 1;
+      if (nextIdx >= activeBookLine.moves.length) return;
+      const expectedMove = activeBookLine.moves[nextIdx];
+
+      // Mark as mistake since they had to reveal the solution
+      if (!quizMistakes.includes(nextIdx)) {
+        setQuizMistakes(prev => [...prev, nextIdx]);
+        fetch('/api/puzzles/attempt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            puzzleId: null,
+            startFen: expectedMove.fen_before,
+            success: false
+          })
+        }).catch(console.error);
+      }
+
+      setQuizFeedback({ type: 'success', text: `Solution: ${expectedMove.san}`, square: expectedMove.uci.slice(2, 4) });
+      setActiveBookMoveIdx(nextIdx);
+      setSolvedMoveIdx(nextIdx);
+      playMoveSound(expectedMove.san.includes('x'));
+    } else if (quizMode === 'review') {
+      if (reviewQueue.length === 0) return;
+      const reviewItem = reviewQueue[currentReviewIdx];
+      const expectedMove = activeBookLine.moves[reviewItem.moveIdx];
+
+      if (activeBookMoveIdx !== reviewItem.moveIdx - 1) {
+        setQuizFeedback({ type: 'error', text: 'Navigate to the review position to reveal solution!' });
+        return;
+      }
+
+      setQuizFeedback({ type: 'success', text: `Solution: ${expectedMove.san}`, square: expectedMove.uci.slice(2, 4) });
+      
+      // Temporarily show the move on the board
+      setActiveBookMoveIdx(reviewItem.moveIdx);
+      playMoveSound(expectedMove.san.includes('x'));
+
+      // Reset count to 2 because they revealed it
+      setReviewQueue(prev => prev.map((item, idx) => idx === currentReviewIdx ? { ...item, count: 2 } : item));
+
+      // Reset board back to review position after 1.5 seconds so they can play it themselves
+      setTimeout(() => {
+        setActiveBookMoveIdx(reviewItem.moveIdx - 1);
+      }, 1500);
+    }
+  }, [
+    mode, activeBookLine, quizMode, quizStatus, activeBookMoveIdx, solvedMoveIdx,
+    quizMistakes, reviewQueue, currentReviewIdx
+  ]);
+
   const playUciMove = useCallback((uci: string) => {
     setExplorerLine(null);
     const chess = new Chess(currentFen), m = tryMakeMove(chess, uci);
@@ -1601,6 +1661,15 @@ export function ChessAnalysis() {
                           <div className="text-[10px] uppercase font-bold tracking-wider">Engine Disabled</div>
                           <div className="text-xs text-zinc-500 mt-1">Stockfish analysis is hidden during the quiz.</div>
                         </div>
+                      )}
+
+                      {quizMode !== 'study' && quizStatus === 'playing' && (
+                        <button
+                          onClick={handleShowSolution}
+                          className="w-full py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 border border-zinc-800 rounded-lg text-xs font-semibold transition-all shadow-md mt-4 cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          💡 Show Solution
+                        </button>
                       )}
 
                       {/* Navigation keyboard arrows reminder / buttons */}
