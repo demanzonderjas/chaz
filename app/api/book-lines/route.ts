@@ -45,6 +45,9 @@ export async function GET(req: NextRequest) {
         notes: r.notes ? String(r.notes) : null
       }));
 
+      // Sort lines naturally (e.g. #2 before #11)
+      lines.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
       return NextResponse.json({
         openings: [
           {
@@ -180,6 +183,11 @@ export async function GET(req: NextRequest) {
     const result = ops.filter(op => op.lines.length > 0);
     if (otherGroup.lines.length > 0) {
       result.push(otherGroup as any);
+    }
+
+    // Sort each opening's lines naturally (e.g. #2 before #11)
+    for (const op of result) {
+      op.lines.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
     }
 
     return NextResponse.json({ openings: result });
