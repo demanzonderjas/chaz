@@ -42,6 +42,17 @@ function getResultStyle(res: string) {
   return 'bg-zinc-800 text-zinc-400 border border-zinc-700';
 }
 
+function areArrowsEqual(a: Arrow[], b: Arrow[]) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].startSquare !== b[i].startSquare || a[i].endSquare !== b[i].endSquare) {
+      return false;
+    }
+  }
+  return true;
+}
+
+
 const ActiveGameHeader = ({ game, onClear, relevantBookLine, onExploreBookLine }: any) => (
   <div className="flex items-center justify-between px-6 py-2.5 bg-zinc-900/60 border-b border-zinc-800 backdrop-blur-md shrink-0">
     <div className="flex items-center gap-4 flex-wrap">
@@ -71,7 +82,7 @@ export function ChessAnalysis() {
   const [cursor, setCursor] = useState(-1);
   const [initialFen, setInitialFen] = useState(STARTING_FEN);
   const [activeGame, setActiveGame] = useState<(GameMeta & { id?: number }) | null>(null);
-  const [mode, setMode] = useState<'analysis' | 'puzzles' | 'game-puzzles'>('analysis');
+  const [mode, setMode] = useState<'analysis' | 'puzzles' | 'game-puzzles' | 'book-explorer'>('analysis');
   const [gameMistakes, setGameMistakes] = useState<any[]>([]);
   const [loadingGameMistakes, setLoadingGameMistakes] = useState(false);
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
@@ -85,15 +96,34 @@ export function ChessAnalysis() {
   const [explorerLine, setExplorerLine] = useState<any | null>(null);
   const [explorerMoveIdx, setExplorerMoveIdx] = useState<number>(-1);
 
+  // Book explorer specific states
+  const [groupedOpenings, setGroupedOpenings] = useState<any[]>([]);
+  const [loadingBookLines, setLoadingBookLines] = useState<boolean>(false);
+  const [activeBookLine, setActiveBookLine] = useState<any | null>(null);
+  const [activeBookMoveIdx, setActiveBookMoveIdx] = useState<number>(-1);
+  const [activeBookNote, setActiveBookNote] = useState<string>('');
+  const [loadedArrows, setLoadedArrows] = useState<Arrow[]>([]);
+  const [drawnArrows, setDrawnArrows] = useState<Arrow[]>([]);
+  const [boardKey, setBoardKey] = useState<number>(0);
+  const [isSavingNote, setIsSavingNote] = useState<boolean>(false);
+  const [saveNoteSuccess, setSaveNoteSuccess] = useState<boolean>(false);
+  const [bookLinesSearch, setBookLinesSearch] = useState<string>('');
+  const [bookLinesColor, setBookLinesColor] = useState<'all' | 'w' | 'b'>('all');
+  const [expandedOpenings, setExpandedOpenings] = useState<Record<number | string, boolean>>({});
+  const [loadingDetailId, setLoadingDetailId] = useState<number | null>(null);
+
   const { ready, evaluation, analyse } = useStockfish();
   const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
   const currentFen = cursor < 0 ? initialFen : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
 
+  const isBookExplorer = mode === 'book-explorer';
   const explorerFen = explorerLine 
     ? (explorerMoveIdx === -1 ? explorerLine.start_fen : explorerLine.moves[explorerMoveIdx].fen_after)
-    : null;
+    : isBookExplorer && activeBookLine
+      ? (activeBookMoveIdx === -1 ? activeBookLine.start_fen || STARTING_FEN : activeBookLine.moves[activeBookMoveIdx].fen_after)
+      : null;
   const boardFen = explorerFen || currentFen;
   const boardColor = explorerFen
     ? (explorerFen.split(' ')[1] as 'w' | 'b')
@@ -145,6 +175,189 @@ export function ChessAnalysis() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [explorerLine, explorerMoveIdx]);
+
+  // Book explorer side-effects and helper functions
+  useEffect(() => {
+    if (mode === 'book-explorer' && groupedOpenings.length === 0) {
+      setLoadingBookLines(true);
+      fetch('/api/book-lines')
+        .then(res => res.json())
+        .then(data => {
+          if (data.openings) {
+            setGroupedOpenings(data.openings);
+          }
+        })
+        .catch(err => console.error('Error fetching book lines:', err))
+        .finally(() => setLoadingBookLines(false));
+    }
+  }, [mode, groupedOpenings.length]);
+
+  useEffect(() => {
+    if (activeBookLine && activeBookMoveIdx >= 0) {
+      const activeMove = activeBookLine.moves[activeBookMoveIdx];
+      setActiveBookNote(activeMove.comment || '');
+      if (activeMove.arrows) {
+        try {
+          const parsed = JSON.parse(activeMove.arrows);
+          const loaded = parsed.map((a: any) => {
+            if (Array.isArray(a)) {
+              return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+            }
+            return {
+              startSquare: a.startSquare,
+              endSquare: a.endSquare,
+              color: a.color || 'rgba(168,85,247,0.85)'
+            };
+          });
+          setLoadedArrows(loaded);
+        } catch {
+          setLoadedArrows([]);
+        }
+      } else {
+        setLoadedArrows([]);
+      }
+    } else {
+      setActiveBookNote('');
+      setLoadedArrows([]);
+    }
+    setDrawnArrows([]);
+    setSaveNoteSuccess(false);
+  }, [activeBookLine?.id, activeBookMoveIdx]);
+
+  const autoSaveArrows = async (newDrawn: Arrow[]) => {
+    if (!activeBookLine || activeBookMoveIdx < 0) return;
+    try {
+      const activeMove = activeBookLine.moves[activeBookMoveIdx];
+      const combined = [...loadedArrows, ...newDrawn];
+      
+      const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
+        if (idx === activeBookMoveIdx) {
+          return {
+            ...m,
+            arrows: combined.length > 0 ? JSON.stringify(combined) : null
+          };
+        }
+        return m;
+      });
+      setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
+
+      await fetch('/api/book-lines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lineId: activeBookLine.id,
+          ply: activeMove.ply,
+          comment: activeBookNote,
+          arrows: combined
+        })
+      });
+    } catch (err) {
+      console.error('Error auto-saving arrows:', err);
+    }
+  };
+
+  const handleSaveNote = async () => {
+    if (!activeBookLine || activeBookMoveIdx < 0) return;
+    setIsSavingNote(true);
+    try {
+      const activeMove = activeBookLine.moves[activeBookMoveIdx];
+      const combined = [...loadedArrows, ...drawnArrows];
+      const res = await fetch('/api/book-lines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lineId: activeBookLine.id,
+          ply: activeMove.ply,
+          comment: activeBookNote,
+          arrows: combined
+        })
+      });
+      if (res.ok) {
+        const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
+          if (idx === activeBookMoveIdx) {
+            return {
+              ...m,
+              comment: activeBookNote,
+              arrows: combined.length > 0 ? JSON.stringify(combined) : null
+            };
+          }
+          return m;
+        });
+        setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
+        setSaveNoteSuccess(true);
+      }
+    } catch (err) {
+      console.error('Error saving note:', err);
+    } finally {
+      setIsSavingNote(false);
+    }
+  };
+
+  const loadBookLineDetail = async (lineId: number) => {
+    setLoadingDetailId(lineId);
+    try {
+      const res = await fetch(`/api/book-lines?id=${lineId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.line && data.moves) {
+          setActiveBookLine({
+            id: data.line.id,
+            name: data.line.name,
+            color: data.line.color,
+            notes: data.line.notes,
+            moves: data.moves
+          });
+          setActiveBookMoveIdx(-1);
+          setOrientation(data.line.color === 'b' ? 'black' : 'white');
+        }
+      }
+    } catch (err) {
+      console.error('Error loading book line detail:', err);
+    } finally {
+      setLoadingDetailId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (mode !== 'book-explorer' || !activeBookLine) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (activeBookMoveIdx > -1) {
+          const nextIdx = activeBookMoveIdx - 1;
+          setActiveBookMoveIdx(nextIdx);
+          playMoveSound(false);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (activeBookMoveIdx < activeBookLine.moves.length - 1) {
+          const nextIdx = activeBookMoveIdx + 1;
+          setActiveBookMoveIdx(nextIdx);
+          const nextMove = activeBookLine.moves[nextIdx];
+          playMoveSound(nextMove.san.includes('x'));
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode, activeBookLine, activeBookMoveIdx]);
+
+  const toggleOpeningExpanded = (opId: number | string) => {
+    setExpandedOpenings(prev => ({ ...prev, [opId]: !prev[opId] }));
+  };
+
+  const getFilteredAndGrouped = () => {
+    const query = bookLinesSearch.trim().toLowerCase();
+    return groupedOpenings.map(op => {
+      const filteredLines = op.lines.filter((line: any) => {
+         const matchesSearch = line.name.toLowerCase().includes(query);
+         const matchesColor = bookLinesColor === 'all' || line.color === bookLinesColor;
+         return matchesSearch && matchesColor;
+      });
+      return { ...op, lines: filteredLines };
+    }).filter(op => op.lines.length > 0);
+  };
 
   const prevCursorRef = useRef(cursor);
 
@@ -309,6 +522,21 @@ export function ChessAnalysis() {
     setBaseState(null);
   }, [baseState]);
 
+  const bookLineActiveIdx = (() => {
+    if (!relevantBookLine) return -2;
+    const normBoard = normalizeBookFen(boardFen);
+    if (normBoard === normalizeBookFen(relevantBookLine.start_fen || STARTING_FEN)) {
+      return -1;
+    }
+    const moves = relevantBookLine.moves || [];
+    for (let i = 0; i < moves.length; i++) {
+      if (normalizeBookFen(moves[i].fen_after) === normBoard) {
+        return i;
+      }
+    }
+    return -2;
+  })();
+
   // Arrows
   const arrowMap = new Map<string, Arrow>();
   if (evaluation.bestMove && evaluation.bestMove.length >= 4) {
@@ -331,6 +559,27 @@ export function ChessAnalysis() {
     }
   }
   const arrows: Arrow[] = Array.from(arrowMap.values());
+  if (mode !== 'book-explorer' && relevantBookLine && bookLineActiveIdx >= 0) {
+    const activeMove = relevantBookLine.moves[bookLineActiveIdx];
+    if (activeMove && activeMove.arrows) {
+      try {
+        const parsed = JSON.parse(activeMove.arrows);
+        const gameBookArrows = parsed.map((a: any) => {
+          if (Array.isArray(a)) {
+            return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+          }
+          return {
+            startSquare: a.startSquare,
+            endSquare: a.endSquare,
+            color: a.color || 'rgba(168,85,247,0.85)'
+          };
+        });
+        arrows.push(...gameBookArrows);
+      } catch (e) {
+        console.error('Error parsing game book arrows', e);
+      }
+    }
+  }
 
   // Board annotation overlay — show icon on the destination square of the current move
   const isVarMove = baseState !== null && cursor > baseState.cursor;
@@ -358,20 +607,7 @@ export function ChessAnalysis() {
     return (cp >= 0 ? '+' : '') + cp.toFixed(2);
   };
 
-  const bookLineActiveIdx = (() => {
-    if (!relevantBookLine) return -2;
-    const normBoard = normalizeBookFen(boardFen);
-    if (normBoard === normalizeBookFen(relevantBookLine.start_fen || STARTING_FEN)) {
-      return -1;
-    }
-    const moves = relevantBookLine.moves || [];
-    for (let i = 0; i < moves.length; i++) {
-      if (normalizeBookFen(moves[i].fen_after) === normBoard) {
-        return i;
-      }
-    }
-    return -2;
-  })();
+
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
@@ -429,6 +665,10 @@ export function ChessAnalysis() {
               </>
             ) : null
           )}
+          <button onClick={() => { setMode(mode === 'book-explorer' ? 'analysis' : 'book-explorer'); setActiveBookLine(null); setActiveBookMoveIdx(-1); }}
+            className={`text-xs px-3 py-1 rounded transition-colors cursor-pointer ${mode === 'book-explorer' ? 'bg-blue-600 hover:bg-blue-500 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'}`}>
+            📖 Book Lines
+          </button>
           <button onClick={() => setMode('puzzles')}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
             🧩 Puzzles
@@ -441,7 +681,7 @@ export function ChessAnalysis() {
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Flip ⇅
           </button>
-          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); setMode('analysis'); }}
+          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); setMode('analysis'); setActiveBookLine(null); setActiveBookMoveIdx(-1); }}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Reset
           </button>
@@ -500,16 +740,33 @@ export function ChessAnalysis() {
         <div className="flex flex-col items-center justify-center flex-1 p-2 gap-4">
           <div className="relative aspect-square" style={{ width: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>
             <ChessboardProvider
+              key={boardKey}
               options={{
                 position: boardFen,
                 boardOrientation: orientation,
-                arrows: [],
+                arrows: mode === 'book-explorer' ? loadedArrows : [],
                 allowDrawingArrows: true,
                 animationDurationInMs: 150,
                 darkSquareStyle: { backgroundColor: '#b58863' },
                 lightSquareStyle: { backgroundColor: '#f0d9b5' },
                 onPieceDrop,
                 squareRenderer,
+                onArrowsChange: ({ arrows }) => {
+                  if (mode !== 'book-explorer' || activeBookMoveIdx < 0) return;
+                  const newArrows = arrows.map((a: any) => {
+                    const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
+                    const endSquare = a.endSquare || (Array.isArray(a) ? a[1] : '');
+                    return {
+                      startSquare,
+                      endSquare,
+                      color: 'rgba(168,85,247,0.85)' // Violet styling
+                    };
+                  });
+                  if (!areArrowsEqual(newArrows, drawnArrows)) {
+                    setDrawnArrows(newArrows);
+                    autoSaveArrows(newArrows);
+                  }
+                }
               }}
             >
               <Chessboard />
@@ -522,158 +779,406 @@ export function ChessAnalysis() {
         </div>
 
         {/* Right panel */}
-        <div className="w-[760px] flex flex-col border-l border-zinc-800 shrink-0">
-          {baseState && (
-            <div className="bg-blue-950/40 border-b border-blue-900/60 p-2.5 text-center flex flex-col gap-1.5 shrink-0 select-none">
-              <span className="text-xs text-blue-300 font-semibold flex items-center justify-center gap-1">🔍 Viewing Variation Line</span>
-              <button onClick={exitVariation}
-                className="text-xs py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full">
-                Back to Game
-              </button>
-            </div>
-          )}
-
-          {/* Eval summary */}
-          <div className="px-3 py-2 border-b border-zinc-800 shrink-0">
-            <div className="flex items-baseline justify-between">
-              <span className="text-2xl font-bold tabular-nums">{evalLabel()}</span>
-              <span className="text-xs text-zinc-500">depth {evaluation.depth}</span>
-            </div>
-            <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto pr-1">
-              {evaluation.lines && evaluation.lines.length > 0 ? (
-                evaluation.lines.slice(0, 4).map((line, idx) => (
-                  <EngineLineRow key={idx} line={line} startFen={boardFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
-                ))
-              ) : (
-                evaluation.pv.length > 0 && (
-                  <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
-                    {pvToSan(boardFen, evaluation.pv).join(' ')}
-                  </p>
-                )
-              )}
-            </div>
-          </div>
-
-          {/* Book Line Explorer */}
-          {relevantBookLine && (
-            <div className="px-3 py-3 border-b border-zinc-800 bg-zinc-900 shrink-0 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Book Line Explorer</span>
-                {explorerLine && (
-                  <button 
-                    onClick={() => setExplorerLine(null)}
-                    className="text-[10px] px-2 py-0.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 rounded font-semibold border border-zinc-700 transition-colors cursor-pointer"
-                  >
-                    Exit Explorer
-                  </button>
-                )}
-              </div>
-              <div className="space-y-1.5">
-                <div 
-                  onClick={() => {
-                    if (!explorerLine) {
-                      setExplorerLine(relevantBookLine);
-                      setExplorerMoveIdx(-1);
-                    }
-                  }}
-                  className={`text-xs font-semibold truncate transition-colors cursor-pointer ${explorerLine ? 'text-blue-300 font-bold' : 'text-zinc-300 hover:text-zinc-100'}`} 
-                  title={relevantBookLine.name}
-                >
-                  📖 {relevantBookLine.name} {explorerLine && <span className="text-[9px] px-1 py-0.2 rounded bg-blue-950/80 border border-blue-900 text-blue-400 font-bold ml-1 uppercase tracking-wider">Active</span>}
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  <button 
-                    onClick={() => {
-                      playMoveSound(false);
-                      setExplorerLine(relevantBookLine);
-                      setExplorerMoveIdx(-1);
-                    }}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${bookLineActiveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-350'}`}
-                  >
-                    Start
-                  </button>
-                  {relevantBookLine.moves.map((move: any, moveIdx: number) => {
-                    const isCurrentMove = bookLineActiveIdx === moveIdx;
-                    return (
-                      <button
-                        key={moveIdx}
-                        onClick={() => {
-                          playMoveSound(move.san.includes('x'));
-                          setExplorerLine(relevantBookLine);
-                          setExplorerMoveIdx(moveIdx);
-                        }}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
-                      >
-                        {move.san}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Book moves */}
-          {bookMoves.length > 0 && (
-            <div className="px-3 py-2 border-b border-zinc-800 shrink-0">
-              <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1.5">Book moves</p>
-              <div className="flex flex-wrap gap-1">
-                {bookMoves.map((bm) => (
-                  <div key={bm.san} className="relative group"
-                    onMouseEnter={() => setHoveredBook(bm.san)}
-                    onMouseLeave={() => setHoveredBook(null)}>
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono cursor-default border transition-colors ${
-                      bm.isMainline ? 'bg-blue-900/50 border-blue-600 text-blue-200' : 'bg-zinc-800 border-zinc-600 text-zinc-300'
-                    }`}>
-                      {bm.isMainline && <span className="text-blue-400 text-[10px]">●</span>}
-                      {bm.san}
-                      <span className="text-zinc-500 text-[10px]">×{bm.lineCount}</span>
+        <div className="w-[760px] flex flex-col border-l border-zinc-800 shrink-0 bg-zinc-950">
+          {mode === 'book-explorer' ? (
+            <div className="flex-1 flex flex-col overflow-hidden p-4">
+              {activeBookLine ? (
+                // Active Book Line Detail View
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="flex items-center gap-2 mb-4 shrink-0">
+                    <button 
+                      onClick={() => {
+                        setActiveBookLine(null);
+                        setActiveBookMoveIdx(-1);
+                      }}
+                      className="text-xs text-zinc-400 hover:text-zinc-205 transition-colors flex items-center gap-1 cursor-pointer bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded"
+                    >
+                      ◀ Back to List
+                    </button>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${activeBookLine.color === 'w' ? 'bg-zinc-850 text-zinc-250 border border-zinc-700' : 'bg-zinc-955 text-zinc-455 border border-zinc-850'}`}>
+                      {activeBookLine.color === 'w' ? 'White' : 'Black'}
                     </span>
-                    {bm.lineNames.length > 0 && (
-                      <div className="absolute bottom-full left-0 mb-1 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-zinc-700 rounded p-2 shadow-xl">
-                        <p className="text-[10px] text-zinc-400 font-semibold mb-1">{bm.lineCount} line{bm.lineCount !== 1 ? 's' : ''}</p>
-                        {bm.lineNames.map((name, i) => (
-                          <p key={i} className="text-[10px] text-zinc-300 leading-tight truncate">{name}</p>
-                        ))}
-                        {bm.lineCount > bm.lineNames.length && (
-                          <p className="text-[10px] text-zinc-500 mt-0.5">+{bm.lineCount - bm.lineNames.length} more</p>
-                        )}
+                  </div>
+                  <h2 className="text-md font-bold text-zinc-100 mb-4 flex items-center gap-1 shrink-0">
+                    📖 {activeBookLine.name}
+                  </h2>
+
+                  <div className="p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2 mb-4 shrink-0">
+                    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1">Variation Moves</div>
+                    <div className="flex flex-wrap gap-1 items-center">
+                      <button
+                        onClick={() => {
+                          setActiveBookMoveIdx(-1);
+                          playMoveSound(false);
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${activeBookMoveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-350'}`}
+                      >
+                        Start
+                      </button>
+                      {activeBookLine.moves.map((move: any, moveIdx: number) => {
+                        const isCurrent = activeBookMoveIdx === moveIdx;
+                        return (
+                          <button
+                            key={moveIdx}
+                            onClick={() => {
+                              setActiveBookMoveIdx(moveIdx);
+                              playMoveSound(move.san.includes('x'));
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrent ? 'bg-blue-900/60 border-blue-700 text-blue-105 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-450 hover:text-zinc-200'}`}
+                          >
+                            {move.san}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4 flex flex-col shrink-0">
+                    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Move Notes & Visual Annotations</div>
+                    {activeBookMoveIdx === -1 ? (
+                      <div className="text-xs text-zinc-455 italic py-2">Select a move to see or add notes.</div>
+                    ) : (
+                      <div className="space-y-3 font-sans">
+                        <div className="text-xs text-zinc-350 flex items-center justify-between">
+                          <span>
+                            Notes for <span className="font-mono font-bold text-blue-300">{activeBookLine.moves[activeBookMoveIdx].san}</span> (move {Math.floor((activeBookLine.moves[activeBookMoveIdx].ply + 1) / 2)}{activeBookLine.moves[activeBookMoveIdx].ply % 2 === 1 ? '.' : '...'}):
+                          </span>
+                          <span className="text-[10px] text-zinc-500 italic">Right-click + drag to draw arrows</span>
+                        </div>
+                        <textarea
+                          value={activeBookNote}
+                          onChange={(e) => setActiveBookNote(e.target.value)}
+                          placeholder="Add your notes about why this move is played..."
+                          className="w-full h-24 bg-zinc-955 border border-zinc-800 rounded p-2 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200"
+                        />
+                        <div className="flex justify-end items-center gap-2">
+                          {(loadedArrows.length > 0 || drawnArrows.length > 0) && (
+                            <button
+                              onClick={async () => {
+                                setLoadedArrows([]);
+                                setDrawnArrows([]);
+                                setBoardKey(k => k + 1);
+                                if (activeBookLine && activeBookMoveIdx >= 0) {
+                                  try {
+                                    const activeMove = activeBookLine.moves[activeBookMoveIdx];
+                                    const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
+                                      if (idx === activeBookMoveIdx) {
+                                        return { ...m, arrows: null };
+                                      }
+                                      return m;
+                                    });
+                                    setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
+                                    await fetch('/api/book-lines', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        lineId: activeBookLine.id,
+                                        ply: activeMove.ply,
+                                        comment: activeBookNote,
+                                        arrows: []
+                                      })
+                                    });
+                                  } catch (err) {
+                                    console.error('Error clearing arrows in db:', err);
+                                  }
+                                }
+                              }}
+                              className="text-xs px-2.5 py-1.5 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-semibold border border-zinc-700 transition-colors cursor-pointer mr-auto"
+                            >
+                              Clear Arrows
+                            </button>
+                          )}
+                          {saveNoteSuccess && (
+                            <span className="text-[11px] text-emerald-400 font-semibold animate-pulse">✓ Saved!</span>
+                          )}
+                          <button
+                            onClick={handleSaveNote}
+                            disabled={isSavingNote}
+                            className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSavingNote ? 'Saving...' : 'Save Notes'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
+
+                  {/* Engine Analysis */}
+                  <div className="px-3 py-2 border border-zinc-900 bg-zinc-950 rounded-lg flex-1 overflow-y-auto">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Engine Analysis</span>
+                      <span className="text-xs text-zinc-505 font-mono">depth {evaluation.depth}</span>
+                    </div>
+                    <div className="flex items-baseline justify-between mb-2">
+                      <span className="text-xl font-bold font-mono tabular-nums">{evalLabel()}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {evaluation.lines && evaluation.lines.length > 0 ? (
+                        evaluation.lines.slice(0, 3).map((line: any, idx: number) => (
+                          <EngineLineRow key={idx} line={line} startFen={boardFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
+                        ))
+                      ) : (
+                        evaluation.pv && evaluation.pv.length > 0 && (
+                          <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
+                            {pvToSan(boardFen, evaluation.pv).join(' ')}
+                          </p>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Navigation keyboard arrows reminder / buttons */}
+                  <div className="flex gap-1 mt-4 shrink-0">
+                    {[
+                      { label: '⏮', action: () => { setActiveBookMoveIdx(-1); playMoveSound(false); }, title: 'Start' },
+                      { label: '◀', action: () => { if (activeBookMoveIdx > -1) { setActiveBookMoveIdx(c => c - 1); playMoveSound(false); } }, title: 'Prev (←)' },
+                      { label: '▶', action: () => { if (activeBookMoveIdx < activeBookLine.moves.length - 1) { const nextIdx = activeBookMoveIdx + 1; setActiveBookMoveIdx(nextIdx); playMoveSound(activeBookLine.moves[nextIdx].san.includes('x')); } }, title: 'Next (→)' },
+                      { label: '⏭', action: () => { const lastIdx = activeBookLine.moves.length - 1; setActiveBookMoveIdx(lastIdx); playMoveSound(activeBookLine.moves[lastIdx].san.includes('x')); }, title: 'End' },
+                    ].map(({ label, action, title }) => (
+                      <button key={label} onClick={action} title={title}
+                        className="flex-1 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-sm transition-colors border border-zinc-805 cursor-pointer">
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                // Book Lines List Explorer View
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="space-y-3 mb-4 shrink-0 font-sans">
+                    <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">📖 Book Line Explorer</h2>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={bookLinesSearch}
+                        onChange={(e) => setBookLinesSearch(e.target.value)}
+                        placeholder="Search variations by name..."
+                        className="flex-1 bg-zinc-900 border border-zinc-800 rounded py-1.5 px-3 text-xs text-zinc-205 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                      <select
+                        value={bookLinesColor}
+                        onChange={(e: any) => setBookLinesColor(e.target.value)}
+                        className="bg-zinc-900 border border-zinc-800 rounded py-1.5 px-2.5 text-xs text-zinc-350 focus:outline-none cursor-pointer"
+                      >
+                        <option value="all">All Colors</option>
+                        <option value="w">White Lines</option>
+                        <option value="b">Black Lines</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto pr-1 space-y-2">
+                    {loadingBookLines ? (
+                      <div className="text-zinc-500 text-xs italic py-4 text-center">Loading openings list...</div>
+                    ) : getFilteredAndGrouped().length === 0 ? (
+                      <div className="text-zinc-500 text-xs italic py-4 text-center">No matching variations found.</div>
+                    ) : (
+                      getFilteredAndGrouped().map((op) => {
+                        const opKey = op.id || 'other';
+                        const isSearchActive = bookLinesSearch.trim().length > 0;
+                        const isExpanded = !!expandedOpenings[opKey] || isSearchActive;
+                        return (
+                          <div key={opKey} className="border border-zinc-905 rounded bg-zinc-900/10 overflow-hidden font-sans">
+                            <button
+                              onClick={() => toggleOpeningExpanded(opKey)}
+                              className="w-full px-3 py-2 bg-zinc-900/40 hover:bg-zinc-900/60 text-left text-xs font-bold text-zinc-300 flex justify-between items-center transition-colors cursor-pointer border-b border-zinc-900/20"
+                            >
+                              <span className="truncate flex items-center gap-1.5">
+                                {isExpanded ? '▼' : '▶'} {op.name}
+                              </span>
+                              <span className="text-[10px] text-zinc-500 font-normal shrink-0">
+                                {op.lines.length} variation{op.lines.length !== 1 ? 's' : ''}
+                              </span>
+                            </button>
+                            {isExpanded && (
+                              <div className="p-1 bg-zinc-950/40 divide-y divide-zinc-900/40 max-h-80 overflow-y-auto">
+                                {op.lines.map((line: any) => {
+                                  const isSelectedLoading = loadingDetailId === line.id;
+                                  return (
+                                    <button
+                                      key={line.id}
+                                      onClick={() => loadBookLineDetail(line.id)}
+                                      disabled={loadingDetailId !== null}
+                                      className="w-full text-left px-3 py-2 text-xs text-zinc-400 hover:text-zinc-205 hover:bg-zinc-900/30 rounded transition-colors flex justify-between items-center cursor-pointer font-medium disabled:opacity-50"
+                                    >
+                                      <span className="truncate flex items-center gap-1.5">
+                                        📖 {line.name}
+                                      </span>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        {isSelectedLoading && <span className="text-[10px] text-blue-450 animate-pulse font-normal mr-1">Loading...</span>}
+                                        <span className={`text-[9px] px-1 rounded font-bold ${line.color === 'w' ? 'text-zinc-350 bg-zinc-800' : 'text-zinc-500 bg-zinc-950 border border-zinc-850'}`}>
+                                          {line.color === 'w' ? 'W' : 'B'}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            // Standard Analysis Mode right panel
+            <>
+              {baseState && (
+                <div className="bg-blue-950/40 border-b border-blue-900/60 p-2.5 text-center flex flex-col gap-1.5 shrink-0 select-none">
+                  <span className="text-xs text-blue-300 font-semibold flex items-center justify-center gap-1">🔍 Viewing Variation Line</span>
+                  <button onClick={exitVariation}
+                    className="text-xs py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full">
+                    Back to Game
+                  </button>
+                </div>
+              )}
+
+              {/* Eval summary */}
+              <div className="px-3 py-2 border-b border-zinc-800 shrink-0">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-bold tabular-nums">{evalLabel()}</span>
+                  <span className="text-xs text-zinc-500">depth {evaluation.depth}</span>
+                </div>
+                <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {evaluation.lines && evaluation.lines.length > 0 ? (
+                    evaluation.lines.slice(0, 4).map((line, idx) => (
+                      <EngineLineRow key={idx} line={line} startFen={boardFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
+                    ))
+                  ) : (
+                    evaluation.pv.length > 0 && (
+                      <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
+                        {pvToSan(boardFen, evaluation.pv).join(' ')}
+                      </p>
+                    )
+                  )}
+                </div>
+              </div>
+
+              {/* Book Line Explorer */}
+              {relevantBookLine && (
+                <div className="px-3 py-3 border-b border-zinc-800 bg-zinc-900 shrink-0 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Book Line Explorer</span>
+                    {explorerLine && (
+                      <button 
+                        onClick={() => setExplorerLine(null)}
+                        className="text-[10px] px-2 py-0.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 rounded font-semibold border border-zinc-700 transition-colors cursor-pointer"
+                      >
+                        Exit Explorer
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    <div 
+                      onClick={() => {
+                        if (!explorerLine) {
+                          setExplorerLine(relevantBookLine);
+                          setExplorerMoveIdx(-1);
+                        }
+                      }}
+                      className={`text-xs font-semibold truncate transition-colors cursor-pointer ${explorerLine ? 'text-blue-300 font-bold' : 'text-zinc-300 hover:text-zinc-100'}`} 
+                      title={relevantBookLine.name}
+                    >
+                      📖 {relevantBookLine.name} {explorerLine && <span className="text-[9px] px-1 py-0.2 rounded bg-blue-950/80 border border-blue-900 text-blue-400 font-bold ml-1 uppercase tracking-wider">Active</span>}
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      <button 
+                        onClick={() => {
+                          playMoveSound(false);
+                          setExplorerLine(relevantBookLine);
+                          setExplorerMoveIdx(-1);
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${bookLineActiveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-350'}`}
+                      >
+                        Start
+                      </button>
+                      {relevantBookLine.moves.map((move: any, moveIdx: number) => {
+                        const isCurrentMove = bookLineActiveIdx === moveIdx;
+                        return (
+                          <button
+                            key={moveIdx}
+                            onClick={() => {
+                              playMoveSound(move.san.includes('x'));
+                              setExplorerLine(relevantBookLine);
+                              setExplorerMoveIdx(moveIdx);
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                          >
+                            {move.san}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Book moves */}
+              {bookMoves.length > 0 && (
+                <div className="px-3 py-2 border-b border-zinc-800 shrink-0">
+                  <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1.5">Book moves</p>
+                  <div className="flex flex-wrap gap-1">
+                    {bookMoves.map((bm) => (
+                      <div key={bm.san} className="relative group"
+                        onMouseEnter={() => setHoveredBook(bm.san)}
+                        onMouseLeave={() => setHoveredBook(null)}>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono cursor-default border transition-colors ${
+                          bm.isMainline ? 'bg-blue-900/50 border-blue-600 text-blue-200' : 'bg-zinc-800 border-zinc-600 text-zinc-300'
+                        }`}>
+                          {bm.isMainline && <span className="text-blue-400 text-[10px]">●</span>}
+                          {bm.san}
+                          <span className="text-zinc-500 text-[10px]">×{bm.lineCount}</span>
+                        </span>
+                        {bm.lineNames.length > 0 && (
+                          <div className="absolute bottom-full left-0 mb-1 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-zinc-700 rounded p-2 shadow-xl">
+                            <p className="text-[10px] text-zinc-400 font-semibold mb-1">{bm.lineCount} line{bm.lineCount !== 1 ? 's' : ''}</p>
+                            {bm.lineNames.map((name, i) => (
+                              <p key={i} className="text-[10px] text-zinc-350 leading-tight truncate">{name}</p>
+                            ))}
+                            {bm.lineCount > bm.lineNames.length && (
+                              <p className="text-[10px] text-zinc-500 mt-0.5">+{bm.lineCount - bm.lineNames.length} more</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Db Explorer */}
+              <DbExplorer fen={boardFen} onSelectMove={playUciMove} />
+
+              {/* Move list */}
+              <div className="flex-1 overflow-hidden">
+                <MoveList
+                  sanMoves={history.map((h) => h.san)}
+                  currentIndex={cursor}
+                  annotations={annotations}
+                  onSelect={(i) => { setCursor(i); setExplorerLine(null); }}
+                  variationStart={baseState ? baseState.cursor : -1}
+                />
+              </div>
+
+              {/* Navigation */}
+              <div className="flex gap-1 px-2 py-2 border-t border-zinc-800 shrink-0">
+                {[
+                  { label: '⏮', action: () => { setCursor(-1); setExplorerLine(null); }, title: 'Start' },
+                  { label: '◀', action: () => { setCursor((c) => Math.max(-1, c - 1)); setExplorerLine(null); }, title: 'Prev (←)' },
+                  { label: '▶', action: () => { setCursor((c) => Math.min(history.length - 1, c + 1)); setExplorerLine(null); }, title: 'Next (→)' },
+                  { label: '⏭', action: () => { setCursor(history.length - 1); setExplorerLine(null); }, title: 'End' },
+                ].map(({ label, action, title }) => (
+                  <button key={label} onClick={action} title={title}
+                    className="flex-1 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-sm transition-colors cursor-pointer border border-zinc-800">
+                    {label}
+                  </button>
                 ))}
               </div>
-            </div>
+            </>
           )}
-
-          {/* Db Explorer */}
-          <DbExplorer fen={boardFen} onSelectMove={playUciMove} />
-
-          {/* Move list */}
-          <div className="flex-1 overflow-hidden">
-            <MoveList
-              sanMoves={history.map((h) => h.san)}
-              currentIndex={cursor}
-              annotations={annotations}
-              onSelect={(i) => { setCursor(i); setExplorerLine(null); }}
-              variationStart={baseState ? baseState.cursor : -1}
-            />
-          </div>
-
-          {/* Navigation */}
-          <div className="flex gap-1 px-2 py-2 border-t border-zinc-800 shrink-0">
-            {[
-              { label: '⏮', action: () => { setCursor(-1); setExplorerLine(null); }, title: 'Start' },
-              { label: '◀', action: () => { setCursor((c) => Math.max(-1, c - 1)); setExplorerLine(null); }, title: 'Prev (←)' },
-              { label: '▶', action: () => { setCursor((c) => Math.min(history.length - 1, c + 1)); setExplorerLine(null); }, title: 'Next (→)' },
-              { label: '⏭', action: () => { setCursor(history.length - 1); setExplorerLine(null); }, title: 'End' },
-            ].map(({ label, action, title }) => (
-              <button key={label} onClick={action} title={title}
-                className="flex-1 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-sm transition-colors">
-                {label}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
       )}

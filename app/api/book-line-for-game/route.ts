@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
     const lineName = String(deepestMatch.name);
 
     const movesRs = await turso.execute({
-      sql: 'SELECT ply, san, uci, fen_after FROM book_moves WHERE line_id = ? ORDER BY ply ASC',
+      sql: 'SELECT bm.ply, bm.san, bm.uci, bm.fen_after, pc.comment, pc.arrows FROM book_moves bm LEFT JOIN position_comments pc ON bm.fen_after = pc.fen WHERE bm.line_id = ? ORDER BY bm.ply ASC',
       args: [lineId]
     });
 
@@ -77,6 +77,8 @@ export async function GET(req: NextRequest) {
       san: String(r.san),
       uci: String(r.uci),
       fen_after: String(r.fen_after),
+      comment: r.comment ? String(r.comment) : null,
+      arrows: r.arrows ? String(r.arrows) : null,
     }));
 
     return NextResponse.json({
