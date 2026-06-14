@@ -1233,6 +1233,26 @@ export function ChessAnalysis() {
                       >
                         ◀ Back to List
                       </button>
+                      {isTempSubgroupActive && (
+                        <button
+                          onClick={async () => {
+                            setMode('analysis');
+                            setActiveBookLine(null);
+                            setActiveBookMoveIdx(-1);
+                            setQuizMode('quiz');
+                            setSolvedMoveIdx(-1);
+                            setQuizMistakes([]);
+                            setReviewQueue([]);
+                            setCurrentReviewIdx(0);
+                            setQuizStatus('playing');
+                            setQuizFeedback(null);
+                            await restoreAllOpenings();
+                          }}
+                          className="text-xs text-rose-400 hover:text-rose-300 transition-colors flex items-center gap-1 cursor-pointer bg-zinc-900 border border-rose-950 px-2.5 py-1.5 rounded font-semibold"
+                        >
+                          ✕ Cancel Practice
+                        </button>
+                      )}
                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${activeBookLine.color === 'w' ? 'bg-zinc-850 text-zinc-250 border border-zinc-700' : 'bg-zinc-955 text-zinc-455 border border-zinc-850'}`}>
                         {activeBookLine.color === 'w' ? 'White' : 'Black'}
                       </span>
@@ -1598,12 +1618,23 @@ export function ChessAnalysis() {
                     <div className="flex items-center justify-between">
                       <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">📖 Book Line Explorer</h2>
                       {isTempSubgroupActive && (
-                        <button
-                          onClick={restoreAllOpenings}
-                          className="text-[10px] px-2.5 py-1 bg-blue-900/40 hover:bg-blue-900/65 text-blue-300 rounded font-semibold border border-blue-800 transition-colors cursor-pointer"
-                        >
-                          🔄 Show All Openings
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={async () => {
+                              setMode('analysis');
+                              await restoreAllOpenings();
+                            }}
+                            className="text-[10px] px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-350 rounded font-semibold border border-zinc-700 transition-colors cursor-pointer"
+                          >
+                            Exit Practice
+                          </button>
+                          <button
+                            onClick={restoreAllOpenings}
+                            className="text-[10px] px-2.5 py-1 bg-blue-900/40 hover:bg-blue-900/65 text-blue-300 rounded font-semibold border border-blue-800 transition-colors cursor-pointer"
+                          >
+                            🔄 Show All Openings
+                          </button>
+                        </div>
                       )}
                     </div>
                     <div className="flex gap-2">
