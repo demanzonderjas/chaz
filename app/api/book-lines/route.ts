@@ -1,8 +1,64 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { turso } from '../../services/turso';
 
+function normalizeBookFen(fen: string): string {
+  const p = fen.split(' ');
+  return `${p[0]} ${p[1]} ${p[2]} -`;
+}
+
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
+  const fen = req.nextUrl.searchParams.get('fen');
+  const positionFen = req.nextUrl.searchParams.get('positionFen');
+
+  if (positionFen) {
+    try {
+      const normFen = normalizeBookFen(positionFen);
+      const pcRs = await turso.execute({
+        sql: 'SELECT comment, arrows FROM position_comments WHERE fen = ?',
+        args: [normFen]
+      });
+      if (pcRs.rows.length > 0) {
+        return NextResponse.json({
+          comment: pcRs.rows[0].comment ? String(pcRs.rows[0].comment) : '',
+          arrows: pcRs.rows[0].arrows ? String(pcRs.rows[0].arrows) : null
+        });
+      }
+      return NextResponse.json({ comment: '', arrows: null });
+    } catch (err) {
+      return NextResponse.json({ error: String(err) }, { status: 500 });
+    }
+  }
+
+  if (fen) {
+    try {
+      const normFen = normalizeBookFen(fen);
+      const linesRs = await turso.execute({
+        sql: 'SELECT id, name, color, notes FROM book_lines WHERE id IN (SELECT DISTINCT line_id FROM book_moves WHERE fen_before = ?) ORDER BY name ASC',
+        args: [normFen]
+      });
+
+      const lines = linesRs.rows.map(r => ({
+        id: Number(r.id),
+        name: String(r.name),
+        color: String(r.color || ''),
+        notes: r.notes ? String(r.notes) : null
+      }));
+
+      return NextResponse.json({
+        openings: [
+          {
+            id: 'temp-group',
+            name: 'Variations from current position',
+            moves_uci: '',
+            lines
+          }
+        ]
+      });
+    } catch (err) {
+      return NextResponse.json({ error: String(err) }, { status: 500 });
+    }
+  }
 
   if (id) {
     // Get single book line details
@@ -134,9 +190,30 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { lineId, ply, comment, arrows } = await req.json();
+    const { lineId, ply, comment, arrows, fen } = await req.json();
+
+    if (fen) {
+      const normFen = normalizeBookFen(fen);
+      const hasComment = comment && comment.trim() !== '';
+      const hasArrows = arrows && Array.isArray(arrows) && arrows.length > 0;
+
+      if (hasComment || hasArrows) {
+        const arrowsStr = hasArrows ? JSON.stringify(arrows) : null;
+        await turso.execute({
+          sql: 'INSERT INTO position_comments (fen, comment, arrows) VALUES (?, ?, ?) ON CONFLICT(fen) DO UPDATE SET comment = excluded.comment, arrows = excluded.arrows',
+          args: [normFen, hasComment ? comment : '', arrowsStr]
+        });
+      } else {
+        await turso.execute({
+          sql: 'DELETE FROM position_comments WHERE fen = ?',
+          args: [normFen]
+        });
+      }
+      return NextResponse.json({ success: true });
+    }
+
     if (lineId === undefined || ply === undefined) {
-      return NextResponse.json({ error: 'Missing lineId or ply' }, { status: 400 });
+      return NextResponse.json({ error: 'Missing lineId, ply or fen' }, { status: 400 });
     }
 
     // Fetch the fen_after of this specific move to sync by FEN

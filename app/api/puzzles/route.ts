@@ -336,19 +336,24 @@ async function fetchBookPuzzle(openingId?: number, color?: string, days?: number
     const deviations = candidates.filter(c => c.isDeviation);
     const pool = deviations.length > 0 ? deviations : candidates;
 
-    // Query mistake stats for candidate FENs
+    // Query mistake stats for candidate FENs (match by standard and normalized book FENs)
     const fenList = pool.map(c => c.fen);
+    const normFenList = pool.map(c => normalizeBookFen(c.fen));
+    const combinedFens = Array.from(new Set([...fenList, ...normFenList]));
     const statMap: Record<string, { mistakes: number; lastResult: string | null }> = {};
-    if (fenList.length > 0) {
-      const pFs = fenList.map(() => '?').join(',');
+    if (combinedFens.length > 0) {
+      const pFs = combinedFens.map(() => '?').join(',');
       const statRs = await turso.execute({
         sql: `SELECT start_fen, mistakes, last_result FROM puzzle_stats WHERE start_fen IN (${pFs})`,
-        args: fenList
+        args: combinedFens
       });
       statRs.rows.forEach(r => {
-        statMap[String(r.start_fen)] = {
-          mistakes: Number(r.mistakes || 0),
-          lastResult: r.last_result ? String(r.last_result) : null
+        const normKey = normalizeBookFen(String(r.start_fen));
+        const current = statMap[normKey] || { mistakes: 0, lastResult: null };
+        const lastResultStr = r.last_result ? String(r.last_result) : null;
+        statMap[normKey] = {
+          mistakes: Math.max(current.mistakes, Number(r.mistakes || 0)),
+          lastResult: (lastResultStr === 'fail' || current.lastResult === 'fail') ? 'fail' : (lastResultStr || current.lastResult)
         };
       });
     }
@@ -356,7 +361,7 @@ async function fetchBookPuzzle(openingId?: number, color?: string, days?: number
     // Weighted random selection: favor deeper book positions and mistake positions
     let totalWeight = 0;
     const poolWithWeights = pool.map(c => {
-      const stats = statMap[c.fen] || { mistakes: 0, lastResult: null };
+      const stats = statMap[normalizeBookFen(c.fen)] || { mistakes: 0, lastResult: null };
       const weight = (c.ply * c.ply) * (1 + stats.mistakes * 5) * (stats.lastResult === 'success' ? 0.02 : 1);
       totalWeight += weight;
       return { c, weight };

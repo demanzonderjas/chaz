@@ -120,6 +120,8 @@ export function ChessAnalysis() {
   const [currentReviewIdx, setCurrentReviewIdx] = useState<number>(0);
   const [quizStatus, setQuizStatus] = useState<'playing' | 'completed' | 'reviewing'>('playing');
   const [quizFeedback, setQuizFeedback] = useState<{ type: 'success' | 'error'; text: string; square?: string } | null>(null);
+  const [quizStartFen, setQuizStartFen] = useState<string | null>(null);
+  const [isTempSubgroupActive, setIsTempSubgroupActive] = useState<boolean>(false);
 
   // Clear quiz feedback after 1.2 seconds
   useEffect(() => {
@@ -185,6 +187,21 @@ export function ChessAnalysis() {
   const boardColor = explorerFen
     ? (explorerFen.split(' ')[1] as 'w' | 'b')
     : currentColor;
+
+  const bookLineActiveIdx = (() => {
+    if (!relevantBookLine) return -2;
+    const normBoard = normalizeBookFen(boardFen);
+    if (normBoard === normalizeBookFen(relevantBookLine.start_fen || STARTING_FEN)) {
+      return -1;
+    }
+    const moves = relevantBookLine.moves || [];
+    for (let i = 0; i < moves.length; i++) {
+      if (normalizeBookFen(moves[i].fen_after) === normBoard) {
+        return i;
+      }
+    }
+    return -2;
+  })();
 
   const { moves: bookMoves, inBook } = useBookMoves(boardFen);
 
@@ -297,6 +314,36 @@ export function ChessAnalysis() {
     setSaveNoteSuccess(false);
   }, [activeBookLine?.id, activeBookMoveIdx]);
 
+  const autoSaveAnalysisArrows = async (newDrawn: Arrow[]) => {
+    try {
+      const combined = [...loadedArrows, ...newDrawn];
+      await fetch('/api/book-lines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fen: boardFen,
+          comment: activeBookNote,
+          arrows: combined
+        })
+      });
+      // Sync relevantBookLine in memory!
+      if (relevantBookLine && bookLineActiveIdx >= 0) {
+        const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => {
+          if (idx === bookLineActiveIdx) {
+            return {
+              ...m,
+              arrows: combined.length > 0 ? JSON.stringify(combined) : null
+            };
+          }
+          return m;
+        });
+        setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
+      }
+    } catch (err) {
+      console.error('Error auto-saving analysis arrows:', err);
+    }
+  };
+
   const autoSaveArrows = async (newDrawn: Arrow[]) => {
     if (!activeBookLine || activeBookMoveIdx < 0) return;
     try {
@@ -380,11 +427,20 @@ export function ChessAnalysis() {
             notes: data.line.notes,
             moves: data.moves
           });
-          setActiveBookMoveIdx(-1);
+          
+          let startIdx = -1;
+          if (quizStartFen) {
+            const normStart = normalizeBookFen(quizStartFen);
+            const matchIdx = data.moves.findIndex((m: any) => normalizeBookFen(m.fen_before) === normStart);
+            if (matchIdx !== -1) {
+              startIdx = matchIdx - 1;
+            }
+          }
+          setActiveBookMoveIdx(startIdx);
           setOrientation(data.line.color === 'b' ? 'black' : 'white');
           // Reset Quiz States
           setQuizMode('quiz');
-          setSolvedMoveIdx(-1);
+          setSolvedMoveIdx(startIdx);
           setQuizMistakes([]);
           setReviewQueue([]);
           setCurrentReviewIdx(0);
@@ -439,6 +495,33 @@ export function ChessAnalysis() {
 
   const toggleOpeningExpanded = (opId: number | string) => {
     setExpandedOpenings(prev => ({ ...prev, [opId]: !prev[opId] }));
+  };
+
+  const practiceVariationsFromCurrentPosition = async () => {
+    setLoadingBookLines(true);
+    const res = await fetch(`/api/book-lines?fen=${encodeURIComponent(boardFen)}`).catch(() => null);
+    setLoadingBookLines(false);
+    if (res?.ok) {
+      const data = await res.json();
+      setGroupedOpenings(data.openings || []);
+      setIsTempSubgroupActive(true);
+      setQuizStartFen(boardFen);
+      setExpandedOpenings({ 'temp-group': true });
+      setMode('book-explorer');
+      setActiveBookLine(null);
+    }
+  };
+
+  const restoreAllOpenings = async () => {
+    setLoadingBookLines(true);
+    const res = await fetch('/api/book-lines').catch(() => null);
+    setLoadingBookLines(false);
+    if (res?.ok) {
+      const data = await res.json();
+      setGroupedOpenings(data.openings || []);
+      setIsTempSubgroupActive(false);
+      setQuizStartFen(null);
+    }
   };
 
   const getFilteredAndGrouped = () => {
@@ -523,6 +606,78 @@ export function ChessAnalysis() {
       .catch(() => setRelevantBookLine(null));
   }, [activeGame?.id]);
 
+  useEffect(() => {
+    if (mode !== 'analysis') return;
+
+    // Check if we can load it from relevantBookLine in memory first
+    if (relevantBookLine && bookLineActiveIdx >= 0) {
+      const activeMove = relevantBookLine.moves[bookLineActiveIdx];
+      setActiveBookNote(activeMove.comment || '');
+      if (activeMove.arrows) {
+        try {
+          const parsed = JSON.parse(activeMove.arrows);
+          const loaded = parsed.map((a: any) => {
+            if (Array.isArray(a)) {
+              return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+            }
+            return {
+              startSquare: a.startSquare,
+              endSquare: a.endSquare,
+              color: a.color || 'rgba(168,85,247,0.85)'
+            };
+          });
+          setLoadedArrows(loaded);
+        } catch {
+          setLoadedArrows([]);
+        }
+      } else {
+        setLoadedArrows([]);
+      }
+      setDrawnArrows([]);
+      setSaveNoteSuccess(false);
+      return;
+    }
+
+    fetch(`/api/book-lines?positionFen=${encodeURIComponent(boardFen)}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setActiveBookNote(data.comment || '');
+          if (data.arrows) {
+            try {
+              const parsed = JSON.parse(data.arrows);
+              const loaded = parsed.map((a: any) => {
+                if (Array.isArray(a)) {
+                  return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+                }
+                return {
+                  startSquare: a.startSquare,
+                  endSquare: a.endSquare,
+                  color: a.color || 'rgba(168,85,247,0.85)'
+                };
+              });
+              setLoadedArrows(loaded);
+            } catch {
+              setLoadedArrows([]);
+            }
+          } else {
+            setLoadedArrows([]);
+          }
+        } else {
+          setActiveBookNote('');
+          setLoadedArrows([]);
+        }
+        setDrawnArrows([]);
+        setSaveNoteSuccess(false);
+      })
+      .catch(() => {
+        setActiveBookNote('');
+        setLoadedArrows([]);
+        setDrawnArrows([]);
+        setSaveNoteSuccess(false);
+      });
+  }, [mode, boardFen, relevantBookLine, bookLineActiveIdx]);
+
   // Interactive piece drop
   const onPieceDrop = useCallback(
     ({ sourceSquare, targetSquare, piece }: any) => {
@@ -567,6 +722,15 @@ export function ChessAnalysis() {
             setQuizFeedback({ type: 'error', text: 'Wrong!', square: targetSquare });
             if (!quizMistakes.includes(nextIdx)) {
               setQuizMistakes(prev => [...prev, nextIdx]);
+              fetch('/api/puzzles/attempt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  puzzleId: null,
+                  startFen: expectedMove.fen_before,
+                  success: false
+                })
+              }).catch(console.error);
             }
             return false;
           }
@@ -616,6 +780,15 @@ export function ChessAnalysis() {
           } else {
             setQuizFeedback({ type: 'error', text: 'Wrong!', square: targetSquare });
             setReviewQueue(prev => prev.map((item, idx) => idx === currentReviewIdx ? { ...item, count: 2 } : item));
+            fetch('/api/puzzles/attempt', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                puzzleId: null,
+                startFen: expectedMove.fen_before,
+                success: false
+              })
+            }).catch(console.error);
             return false;
           }
         }
@@ -749,20 +922,7 @@ export function ChessAnalysis() {
     setBaseState(null);
   }, [baseState]);
 
-  const bookLineActiveIdx = (() => {
-    if (!relevantBookLine) return -2;
-    const normBoard = normalizeBookFen(boardFen);
-    if (normBoard === normalizeBookFen(relevantBookLine.start_fen || STARTING_FEN)) {
-      return -1;
-    }
-    const moves = relevantBookLine.moves || [];
-    for (let i = 0; i < moves.length; i++) {
-      if (normalizeBookFen(moves[i].fen_after) === normBoard) {
-        return i;
-      }
-    }
-    return -2;
-  })();
+
 
   // Arrows
   const arrowMap = new Map<string, Arrow>();
@@ -786,7 +946,7 @@ export function ChessAnalysis() {
     }
   }
   const arrows: Arrow[] = Array.from(arrowMap.values());
-  if (mode !== 'book-explorer' && relevantBookLine && bookLineActiveIdx >= 0) {
+  if (mode !== 'book-explorer' && mode !== 'analysis' && relevantBookLine && bookLineActiveIdx >= 0) {
     const activeMove = relevantBookLine.moves[bookLineActiveIdx];
     if (activeMove && activeMove.arrows) {
       try {
@@ -815,7 +975,7 @@ export function ChessAnalysis() {
 
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
-      const show = !!(square === annotationSquare && currentAnnotation?.types?.length);
+      const show = !!(mode !== 'book-explorer' && square === annotationSquare && currentAnnotation?.types?.length);
       const hasQuizFeedback = mode === 'book-explorer' && quizFeedback && square === quizFeedback.square;
       return (
         <div className="relative w-full h-full">
@@ -923,6 +1083,8 @@ export function ChessAnalysis() {
             setCurrentReviewIdx(0);
             setQuizStatus('playing');
             setQuizFeedback(null);
+            setQuizStartFen(null);
+            setIsTempSubgroupActive(false);
           }}
             className={`text-xs px-3 py-1 rounded transition-colors cursor-pointer ${mode === 'book-explorer' ? 'bg-blue-600 hover:bg-blue-500 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'}`}>
             📖 Book Lines
@@ -939,7 +1101,7 @@ export function ChessAnalysis() {
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Flip ⇅
           </button>
-          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); setMode('analysis'); setActiveBookLine(null); setActiveBookMoveIdx(-1); }}
+          <button onClick={() => { setHistory([]); setCursor(-1); resetAnalysis(); setInitialFen(STARTING_FEN); setActiveGame(null); setMode('analysis'); setActiveBookLine(null); setActiveBookMoveIdx(-1); setQuizStartFen(null); setIsTempSubgroupActive(false); }}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors">
             Reset
           </button>
@@ -1002,16 +1164,21 @@ export function ChessAnalysis() {
               options={{
                 position: boardFen,
                 boardOrientation: orientation,
-                arrows: mode === 'book-explorer' && (quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx) ? loadedArrows : [],
-                allowDrawingArrows: quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx,
+                arrows: mode === 'book-explorer'
+                  ? ((quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx) ? loadedArrows : [])
+                  : (mode === 'analysis' ? loadedArrows : []),
+                allowDrawingArrows: mode === 'analysis' || quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx,
                 animationDurationInMs: 150,
                 darkSquareStyle: { backgroundColor: '#b58863' },
                 lightSquareStyle: { backgroundColor: '#f0d9b5' },
                 onPieceDrop,
                 squareRenderer,
                 onArrowsChange: ({ arrows }) => {
-                  if (mode !== 'book-explorer' || activeBookMoveIdx < 0) return;
-                  if (quizMode !== 'study' && activeBookMoveIdx > solvedMoveIdx) return;
+                  if (mode !== 'book-explorer' && mode !== 'analysis') return;
+                  if (mode === 'book-explorer') {
+                    if (activeBookMoveIdx < 0) return;
+                    if (quizMode !== 'study' && activeBookMoveIdx > solvedMoveIdx) return;
+                  }
                   const newArrows = arrows.map((a: any) => {
                     const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
                     const endSquare = a.endSquare || (Array.isArray(a) ? a[1] : '');
@@ -1023,7 +1190,11 @@ export function ChessAnalysis() {
                   });
                   if (!areArrowsEqual(newArrows, drawnArrows)) {
                     setDrawnArrows(newArrows);
-                    autoSaveArrows(newArrows);
+                    if (mode === 'book-explorer') {
+                      autoSaveArrows(newArrows);
+                    } else if (mode === 'analysis') {
+                      autoSaveAnalysisArrows(newArrows);
+                    }
                   }
                 }
               }}
@@ -1424,7 +1595,17 @@ export function ChessAnalysis() {
                 // Book Lines List Explorer View
                 <div className="flex-1 flex flex-col overflow-hidden">
                   <div className="space-y-3 mb-4 shrink-0 font-sans">
-                    <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">📖 Book Line Explorer</h2>
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">📖 Book Line Explorer</h2>
+                      {isTempSubgroupActive && (
+                        <button
+                          onClick={restoreAllOpenings}
+                          className="text-[10px] px-2.5 py-1 bg-blue-900/40 hover:bg-blue-900/65 text-blue-300 rounded font-semibold border border-blue-800 transition-colors cursor-pointer"
+                        >
+                          🔄 Show All Openings
+                        </button>
+                      )}
+                    </div>
                     <div className="flex gap-2">
                       <input
                         type="text"
@@ -1540,14 +1721,22 @@ export function ChessAnalysis() {
                 <div className="px-3 py-3 border-b border-zinc-800 bg-zinc-900 shrink-0 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Book Line Explorer</span>
-                    {explorerLine && (
-                      <button 
-                        onClick={() => setExplorerLine(null)}
-                        className="text-[10px] px-2 py-0.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 rounded font-semibold border border-zinc-700 transition-colors cursor-pointer"
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={practiceVariationsFromCurrentPosition}
+                        className="text-[10px] px-2.5 py-1 bg-blue-900/60 hover:bg-blue-800/80 text-blue-100 rounded font-semibold border border-blue-700 transition-colors cursor-pointer animate-pulse"
                       >
-                        Exit Explorer
+                        🎯 Practice from Here
                       </button>
-                    )}
+                      {explorerLine && (
+                        <button 
+                          onClick={() => setExplorerLine(null)}
+                          className="text-[10px] px-2 py-0.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 rounded font-semibold border border-zinc-700 transition-colors cursor-pointer"
+                        >
+                          Exit Explorer
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="space-y-1.5">
                     <div 
@@ -1612,7 +1801,15 @@ export function ChessAnalysis() {
               {/* Book moves */}
               {bookMoves.length > 0 && (
                 <div className="px-3 py-2 border-b border-zinc-800 shrink-0">
-                  <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1.5">Book moves</p>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[10px] uppercase tracking-widest text-zinc-500">Book moves</p>
+                    <button
+                      onClick={practiceVariationsFromCurrentPosition}
+                      className="text-[10px] px-2 py-0.5 bg-blue-900/60 hover:bg-blue-800/80 text-blue-100 rounded font-semibold border border-blue-700 transition-colors cursor-pointer animate-pulse"
+                    >
+                      🎯 Practice from Here
+                    </button>
+                  </div>
                   <div className="flex flex-wrap gap-1">
                     {bookMoves.map((bm) => (
                       <div key={bm.san} className="relative group"
@@ -1641,6 +1838,110 @@ export function ChessAnalysis() {
                   </div>
                 </div>
               )}
+
+              {/* Game Position Note taking */}
+              <div className="px-3 py-3 border-b border-zinc-800 shrink-0 font-sans space-y-2">
+                <div className="flex items-center justify-between text-[10px] uppercase font-bold tracking-wider text-zinc-550">
+                  <span>Position Notes & Annotations</span>
+                  <span className="text-zinc-600 font-normal italic font-mono normal-case">Right-click + drag to draw arrows</span>
+                </div>
+                <textarea
+                  value={activeBookNote}
+                  onChange={(e) => setActiveBookNote(e.target.value)}
+                  placeholder="Save notes for this specific board position (auto-shared across all games!)..."
+                  className="w-full h-16 bg-zinc-900 border border-zinc-805 rounded p-1.5 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200"
+                />
+                <div className="flex justify-end items-center gap-2">
+                  {(loadedArrows.length > 0 || drawnArrows.length > 0) && (
+                    <button
+                      onClick={async () => {
+                        setLoadedArrows([]);
+                        setDrawnArrows([]);
+                        setBoardKey(k => k + 1);
+                        try {
+                          await fetch('/api/book-lines', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              fen: boardFen,
+                              comment: activeBookNote,
+                              arrows: []
+                            })
+                          });
+                          // Sync relevantBookLine in memory!
+                          if (relevantBookLine && bookLineActiveIdx >= 0) {
+                            const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => {
+                              if (idx === bookLineActiveIdx) {
+                                return { ...m, arrows: null };
+                              }
+                              return m;
+                            });
+                            setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
+                          }
+                        } catch (err) {
+                          console.error('Error clearing position arrows:', err);
+                        }
+                      }}
+                      className="text-[10px] px-2 py-1 rounded bg-zinc-850 hover:bg-zinc-800 border border-zinc-700 text-zinc-350 transition-colors cursor-pointer mr-auto"
+                    >
+                      Clear Arrows
+                    </button>
+                  )}
+                  {saveNoteSuccess && (
+                    <span className="text-[10px] text-emerald-455 font-semibold animate-pulse">✓ Saved!</span>
+                  )}
+                  <button
+                    onClick={async () => {
+                      setIsSavingNote(true);
+                      try {
+                        const combined = [...loadedArrows, ...drawnArrows];
+                        const res = await fetch('/api/book-lines', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            fen: boardFen,
+                            comment: activeBookNote,
+                            arrows: combined
+                          })
+                        });
+                        if (res.ok) {
+                          setSaveNoteSuccess(true);
+                          const loaded = combined.map(a => ({
+                            startSquare: a.startSquare,
+                            endSquare: a.endSquare,
+                            color: a.color || 'rgba(168,85,247,0.85)'
+                          }));
+                          setLoadedArrows(loaded);
+                          setDrawnArrows([]);
+
+                          // Sync relevantBookLine in memory!
+                          if (relevantBookLine && bookLineActiveIdx >= 0) {
+                            const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => {
+                              if (idx === bookLineActiveIdx) {
+                                return {
+                                  ...m,
+                                  comment: activeBookNote,
+                                  arrows: combined.length > 0 ? JSON.stringify(combined) : null
+                                };
+                              }
+                              return m;
+                            });
+                            setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
+                          }
+                        }
+                      } catch (err) {
+                        console.error('Error saving game position note:', err);
+                      } finally {
+                        setIsSavingNote(false);
+                      }
+                    }}
+                    disabled={isSavingNote}
+                    className="text-[10px] px-3 py-1 rounded bg-blue-900/80 hover:bg-blue-800/80 text-blue-100 font-semibold border border-blue-700 transition-colors cursor-pointer"
+                  >
+                    {isSavingNote ? 'Saving...' : 'Save Note'}
+                  </button>
+                </div>
+              </div>
 
               {/* Db Explorer */}
               <DbExplorer fen={boardFen} onSelectMove={playUciMove} />
