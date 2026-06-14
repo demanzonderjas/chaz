@@ -775,24 +775,39 @@ export function ChessAnalysis() {
             setActiveBookMoveIdx(reviewItem.moveIdx);
 
             const nextCount = reviewItem.count - 1;
-            if (nextCount > 0) {
-              setQuizFeedback({ type: 'success', text: `Correct! Solve it ${nextCount} more time${nextCount > 1 ? 's' : ''}.`, square: targetSquare });
-              setReviewQueue(prev => prev.map((item, idx) => idx === currentReviewIdx ? { ...item, count: nextCount } : item));
+            const updatedQueue = reviewQueue.map((item, idx) => 
+              idx === currentReviewIdx ? { ...item, count: nextCount } : item
+            );
+            
+            const remainingCount = updatedQueue.reduce((acc, item) => acc + item.count, 0);
+
+            if (remainingCount > 0) {
+              // Find the next index in the queue that still has count > 0 (wraparound search)
+              let nextReviewIdx = currentReviewIdx;
+              for (let i = 1; i <= updatedQueue.length; i++) {
+                const checkIdx = (currentReviewIdx + i) % updatedQueue.length;
+                if (updatedQueue[checkIdx].count > 0) {
+                  nextReviewIdx = checkIdx;
+                  break;
+                }
+              }
+
+              setQuizFeedback({ 
+                type: 'success', 
+                text: nextCount > 0 ? 'Correct! Next mistake...' : 'Cleared for this round! Next mistake...', 
+                square: targetSquare 
+              });
+              setReviewQueue(updatedQueue);
+              
               setTimeout(() => {
-                setActiveBookMoveIdx(reviewItem.moveIdx - 1);
+                setCurrentReviewIdx(nextReviewIdx);
+                setActiveBookMoveIdx(updatedQueue[nextReviewIdx].moveIdx - 1);
               }, 1000);
             } else {
-              setQuizFeedback({ type: 'success', text: 'Cleared!', square: targetSquare });
-              const updatedQueue = reviewQueue.filter((_, idx) => idx !== currentReviewIdx);
+              setQuizFeedback({ type: 'success', text: 'All mistakes cleared!', square: targetSquare });
+              setReviewQueue([]);
               setTimeout(() => {
-                setReviewQueue(updatedQueue);
-                if (updatedQueue.length === 0) {
-                  setQuizStatus('completed');
-                } else {
-                  const nextReviewIdx = currentReviewIdx >= updatedQueue.length ? 0 : currentReviewIdx;
-                  setCurrentReviewIdx(nextReviewIdx);
-                  setActiveBookMoveIdx(updatedQueue[nextReviewIdx].moveIdx - 1);
-                }
+                setQuizStatus('completed');
               }, 1000);
             }
             return true;
@@ -1499,7 +1514,7 @@ export function ChessAnalysis() {
                             </span>
                           </div>
                           <div className="text-[10px] text-zinc-500">
-                            Play the correct move for {activeBookLine.color === 'w' ? 'White' : 'Black'} twice in a row!
+                            Redo all mistakes one time first, and then a second time to build muscle memory!
                           </div>
                         </div>
                       )}
