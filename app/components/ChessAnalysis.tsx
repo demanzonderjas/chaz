@@ -90,7 +90,7 @@ export function ChessAnalysis() {
   const [pgnError, setPgnError] = useState('');
   const [showPgnPanel, setShowPgnPanel] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
-  const [baseState, setBaseState] = useState<{ history: HistoryEntry[]; cursor: number } | null>(null);
+  const [baseState, setBaseState] = useState<{ history: HistoryEntry[]; cursor: number; initialFen?: string; previousMode?: 'analysis' | 'book-explorer' } | null>(null);
   const [hoveredBook, setHoveredBook] = useState<string | null>(null);
   const [relevantBookLine, setRelevantBookLine] = useState<any | null>(null);
   const [explorerLine, setExplorerLine] = useState<any | null>(null);
@@ -172,7 +172,7 @@ export function ChessAnalysis() {
   const { ready, evaluation, analyse } = useStockfish();
   const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
-  const currentFen = cursor < 0 ? initialFen : history[cursor].fen;
+  const currentFen = (cursor < 0 || !history[cursor]) ? initialFen : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
 
   const isBookExplorer = mode === 'book-explorer';
@@ -693,19 +693,52 @@ export function ChessAnalysis() {
   }, [pgnInput, loadRawPgn]);
 
   const enterVariation = useCallback((line: any) => {
-    if (!baseState) {
-      setBaseState({ history, cursor });
+    if (mode === 'book-explorer') {
+      setBaseState({
+        history,
+        cursor,
+        initialFen,
+        previousMode: 'book-explorer'
+      });
+
+      const prefixEntries = activeBookLine
+        ? activeBookLine.moves.slice(0, activeBookMoveIdx + 1).map((m: any) => ({
+            fen: m.fen_after,
+            san: m.san,
+            to: m.uci.slice(2, 4)
+          }))
+        : [];
+
+      const startFenForVar = boardFen || STARTING_FEN;
+      const newEntries = buildVariationEntries(startFenForVar, line.pv);
+      
+      setInitialFen(activeBookLine?.start_fen || STARTING_FEN);
+      setHistory([...prefixEntries, ...newEntries]);
+      setCursor(prefixEntries.length);
+      setMode('analysis');
+      if (newEntries[0]) playMoveSound(newEntries[0].san.includes('x'));
+      return;
     }
-    const newEntries = buildVariationEntries(currentFen, line.pv);
+
+    if (!baseState) {
+      setBaseState({ history, cursor, initialFen, previousMode: 'analysis' });
+    }
+    const newEntries = buildVariationEntries(boardFen || currentFen, line.pv);
     setHistory([...history.slice(0, cursor + 1), ...newEntries]);
     setCursor(cursor + 1);
     if (newEntries[0]) playMoveSound(newEntries[0].san.includes('x'));
-  }, [baseState, history, cursor, currentFen]);
+  }, [baseState, history, cursor, currentFen, boardFen, mode, activeBookLine, activeBookMoveIdx, initialFen]);
 
   const exitVariation = useCallback(() => {
     if (!baseState) return;
     setHistory(baseState.history);
     setCursor(baseState.cursor);
+    if (baseState.initialFen) {
+      setInitialFen(baseState.initialFen);
+    }
+    if (baseState.previousMode) {
+      setMode(baseState.previousMode);
+    }
     setBaseState(null);
   }, [baseState]);
 
@@ -1469,7 +1502,7 @@ export function ChessAnalysis() {
                   <span className="text-xs text-blue-300 font-semibold flex items-center justify-center gap-1">🔍 Viewing Variation Line</span>
                   <button onClick={exitVariation}
                     className="text-xs py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full">
-                    Back to Game
+                    {baseState.previousMode === 'book-explorer' ? 'Back to Book Lines' : 'Back to Game'}
                   </button>
                 </div>
               )}
