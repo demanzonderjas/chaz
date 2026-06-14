@@ -1290,9 +1290,9 @@ export function ChessAnalysis() {
                 position: tempWrongFen || boardFen,
                 boardOrientation: orientation,
                 arrows: mode === 'book-explorer'
-                  ? ((quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx) ? loadedArrows : [])
+                  ? (quizMode === 'study' ? loadedArrows : [])
                   : (mode === 'analysis' ? loadedArrows : []),
-                allowDrawingArrows: mode === 'analysis' || quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx,
+                allowDrawingArrows: mode === 'analysis' || quizMode === 'study',
                 animationDurationInMs: 150,
                 darkSquareStyle: { backgroundColor: '#b58863' },
                 lightSquareStyle: { backgroundColor: '#f0d9b5' },
@@ -1301,8 +1301,8 @@ export function ChessAnalysis() {
                 onArrowsChange: ({ arrows }) => {
                   if (mode !== 'book-explorer' && mode !== 'analysis') return;
                   if (mode === 'book-explorer') {
+                    if (quizMode !== 'study') return;
                     if (activeBookMoveIdx < 0) return;
-                    if (quizMode !== 'study' && activeBookMoveIdx > solvedMoveIdx) return;
                   }
                   const newArrows = arrows.map((a: any, index: number) => {
                     const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
@@ -1599,13 +1599,13 @@ export function ChessAnalysis() {
 
                       <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4 flex flex-col shrink-0">
                         <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Move Notes & Visual Annotations</div>
-                        {!isMoveVisible(activeBookMoveIdx) || activeBookMoveIdx === -1 ? (
+                        {quizMode !== 'study' || activeBookMoveIdx === -1 ? (
                           <div className="text-xs text-zinc-455 italic py-2 font-sans">
                             {activeBookMoveIdx === -1 
                               ? 'Select a move to see or add notes.' 
                               : quizMode === 'review'
-                                ? 'Notes are hidden during mistake review.'
-                                : 'Notes and annotations are hidden until this move is solved!'}
+                                ? 'Notes and annotations are hidden during mistake review.'
+                                : 'Notes and annotations are hidden in Quiz Mode.'}
                           </div>
                         ) : (
                           <div className="space-y-3 font-sans">
