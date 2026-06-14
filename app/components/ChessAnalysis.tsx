@@ -17,7 +17,7 @@ import { playMoveSound, playErrorSound } from '../services/sound';
 import { preprocessPgn, isUserBlack } from '../services/pgn';
 
 
-type Arrow = { startSquare: string; endSquare: string; color: string };
+type Arrow = { id?: string; startSquare: string; endSquare: string; color: string };
 
 const ANNOTATION_ICONS: Record<string, { symbol: string; bg: string; text: string }> = {
   book:        { symbol: '📖',   bg: '#2563eb', text: '#ffffff' },
@@ -290,17 +290,23 @@ export function ChessAnalysis() {
       if (activeMove.arrows) {
         try {
           const parsed = JSON.parse(activeMove.arrows);
-          const loaded = parsed.map((a: any) => {
+          const loaded = parsed.map((a: any, index: number) => {
             if (Array.isArray(a)) {
-              return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+              return {
+                id: `loaded-${a[0]}-${a[1]}-${index}`,
+                startSquare: a[0],
+                endSquare: a[1],
+                color: a[2] || 'rgba(168,85,247,0.85)'
+              };
             }
             return {
+              id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
               startSquare: a.startSquare,
               endSquare: a.endSquare,
               color: a.color || 'rgba(168,85,247,0.85)'
             };
           });
-          setLoadedArrows(loaded);
+          setLoadedArrows(deduplicateArrows(loaded));
         } catch {
           setLoadedArrows([]);
         }
@@ -318,7 +324,7 @@ export function ChessAnalysis() {
 
   const autoSaveAnalysisArrows = async (newDrawn: Arrow[]) => {
     try {
-      const combined = [...loadedArrows, ...newDrawn];
+      const combined = deduplicateArrows(newDrawn);
       await fetch('/api/book-lines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -350,7 +356,7 @@ export function ChessAnalysis() {
     if (!activeBookLine || activeBookMoveIdx < 0) return;
     try {
       const activeMove = activeBookLine.moves[activeBookMoveIdx];
-      const combined = [...loadedArrows, ...newDrawn];
+      const combined = deduplicateArrows(newDrawn);
       
       const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
         if (idx === activeBookMoveIdx) {
@@ -383,7 +389,7 @@ export function ChessAnalysis() {
     setIsSavingNote(true);
     try {
       const activeMove = activeBookLine.moves[activeBookMoveIdx];
-      const combined = [...loadedArrows, ...drawnArrows];
+      const combined = deduplicateArrows([...loadedArrows, ...drawnArrows]);
       const res = await fetch('/api/book-lines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -618,17 +624,23 @@ export function ChessAnalysis() {
       if (activeMove.arrows) {
         try {
           const parsed = JSON.parse(activeMove.arrows);
-          const loaded = parsed.map((a: any) => {
+          const loaded = parsed.map((a: any, index: number) => {
             if (Array.isArray(a)) {
-              return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+              return {
+                id: `loaded-${a[0]}-${a[1]}-${index}`,
+                startSquare: a[0],
+                endSquare: a[1],
+                color: a[2] || 'rgba(168,85,247,0.85)'
+              };
             }
             return {
+              id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
               startSquare: a.startSquare,
               endSquare: a.endSquare,
               color: a.color || 'rgba(168,85,247,0.85)'
             };
           });
-          setLoadedArrows(loaded);
+          setLoadedArrows(deduplicateArrows(loaded));
         } catch {
           setLoadedArrows([]);
         }
@@ -648,17 +660,23 @@ export function ChessAnalysis() {
           if (data.arrows) {
             try {
               const parsed = JSON.parse(data.arrows);
-              const loaded = parsed.map((a: any) => {
+              const loaded = parsed.map((a: any, index: number) => {
                 if (Array.isArray(a)) {
-                  return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+                  return {
+                    id: `loaded-${a[0]}-${a[1]}-${index}`,
+                    startSquare: a[0],
+                    endSquare: a[1],
+                    color: a[2] || 'rgba(168,85,247,0.85)'
+                  };
                 }
                 return {
+                  id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
                   startSquare: a.startSquare,
                   endSquare: a.endSquare,
                   color: a.color || 'rgba(168,85,247,0.85)'
                 };
               });
-              setLoadedArrows(loaded);
+              setLoadedArrows(deduplicateArrows(loaded));
             } catch {
               setLoadedArrows([]);
             }
@@ -1028,6 +1046,7 @@ export function ChessAnalysis() {
   if (evaluation.bestMove && evaluation.bestMove.length >= 4) {
     const key = `${evaluation.bestMove.slice(0, 2)}-${evaluation.bestMove.slice(2, 4)}`;
     arrowMap.set(key, {
+      id: `engine-best-${key}`,
       startSquare: evaluation.bestMove.slice(0, 2),
       endSquare: evaluation.bestMove.slice(2, 4),
       color: 'rgba(0,200,100,0.8)',
@@ -1038,6 +1057,7 @@ export function ChessAnalysis() {
       const key = `${bm.uci.slice(0, 2)}-${bm.uci.slice(2, 4)}`;
       const isHovered = hoveredBook === bm.san;
       arrowMap.set(key, {
+        id: `book-${key}-${bm.san}`,
         startSquare: bm.uci.slice(0, 2),
         endSquare: bm.uci.slice(2, 4),
         color: isHovered ? 'rgba(96,165,250,0.95)' : bm.isMainline ? 'rgba(96,165,250,0.55)' : 'rgba(96,165,250,0.25)',
@@ -1050,11 +1070,17 @@ export function ChessAnalysis() {
     if (activeMove && activeMove.arrows) {
       try {
         const parsed = JSON.parse(activeMove.arrows);
-        const gameBookArrows = parsed.map((a: any) => {
+        const gameBookArrows = parsed.map((a: any, index: number) => {
           if (Array.isArray(a)) {
-            return { startSquare: a[0], endSquare: a[1], color: a[2] || 'rgba(168,85,247,0.85)' };
+            return {
+              id: `loaded-${a[0]}-${a[1]}-${index}`,
+              startSquare: a[0],
+              endSquare: a[1],
+              color: a[2] || 'rgba(168,85,247,0.85)'
+            };
           }
           return {
+            id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
             startSquare: a.startSquare,
             endSquare: a.endSquare,
             color: a.color || 'rgba(168,85,247,0.85)'
@@ -1278,10 +1304,11 @@ export function ChessAnalysis() {
                     if (activeBookMoveIdx < 0) return;
                     if (quizMode !== 'study' && activeBookMoveIdx > solvedMoveIdx) return;
                   }
-                  const newArrows = arrows.map((a: any) => {
+                  const newArrows = arrows.map((a: any, index: number) => {
                     const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
                     const endSquare = a.endSquare || (Array.isArray(a) ? a[1] : '');
                     return {
+                      id: `drawn-${startSquare}-${endSquare}-${index}`,
                       startSquare,
                       endSquare,
                       color: 'rgba(168,85,247,0.85)' // Violet styling
@@ -2045,7 +2072,8 @@ export function ChessAnalysis() {
                         });
                         if (res.ok) {
                           setSaveNoteSuccess(true);
-                          const loaded = combined.map(a => ({
+                          const loaded = combined.map((a, index) => ({
+                            id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
                             startSquare: a.startSquare,
                             endSquare: a.endSquare,
                             color: a.color || 'rgba(168,85,247,0.85)'
@@ -2181,10 +2209,23 @@ const ArrowGroup = ({ arrow, orientation }: { arrow: Arrow; orientation: 'white'
   );
 };
 
+function deduplicateArrows(arrows: Arrow[]): Arrow[] {
+  const seen = new Set<string>();
+  return arrows.filter(a => {
+    const key = `${a.startSquare}-${a.endSquare}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function CustomBoardArrows({ arrows, orientation }: { arrows: Arrow[]; orientation: 'white' | 'black' }) {
+  const uniqueArrows = deduplicateArrows(arrows);
   return (
     <svg viewBox="0 0 100 100" className="absolute inset-0 pointer-events-none z-20">
-      {arrows.map((a, i) => <ArrowGroup key={i} arrow={a} orientation={orientation} />)}
+      {uniqueArrows.map((a) => (
+        <ArrowGroup key={a.id || `${a.startSquare}-${a.endSquare}-${a.color}`} arrow={a} orientation={orientation} />
+      ))}
     </svg>
   );
 }
