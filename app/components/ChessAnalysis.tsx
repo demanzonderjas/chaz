@@ -390,6 +390,13 @@ export function ChessAnalysis() {
           setCurrentReviewIdx(0);
           setQuizStatus('playing');
           setQuizFeedback(null);
+          // Unload Game States
+          setActiveGame(null);
+          setGameMistakes([]);
+          setRelevantBookLine(null);
+          setBaseState(null);
+          setExplorerLine(null);
+          setExplorerMoveIdx(-1);
         }
       }
     } catch (err) {
@@ -1576,13 +1583,28 @@ export function ChessAnalysis() {
                               setExplorerLine(relevantBookLine);
                               setExplorerMoveIdx(moveIdx);
                             }}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrentMove ? 'bg-blue-900/60 border-blue-700 text-blue-100 font-bold' : 'bg-zinc-955 border-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
                           >
                             {move.san}
                           </button>
                         );
                       })}
                     </div>
+                    {bookLineActiveIdx >= 0 && bookLineActiveIdx < relevantBookLine.moves.length && (
+                      <div className="mt-2.5 p-2.5 bg-zinc-955/60 border border-zinc-850 rounded font-sans">
+                        <div className="text-zinc-505 text-[9px] uppercase font-bold tracking-wider mb-1 flex items-center justify-between">
+                          <span>Book Note</span>
+                          <span className="text-[8px] text-zinc-500 font-normal normal-case font-mono">Move {Math.floor((relevantBookLine.moves[bookLineActiveIdx].ply + 1) / 2)}{relevantBookLine.moves[bookLineActiveIdx].ply % 2 === 1 ? '.' : '...'}</span>
+                        </div>
+                        {relevantBookLine.moves[bookLineActiveIdx].comment ? (
+                          <p className="text-xs text-zinc-300 leading-normal whitespace-pre-wrap">
+                            {relevantBookLine.moves[bookLineActiveIdx].comment}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-zinc-600 italic">No notes saved for this position.</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
