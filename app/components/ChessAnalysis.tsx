@@ -112,6 +112,63 @@ export function ChessAnalysis() {
   const [expandedOpenings, setExpandedOpenings] = useState<Record<number | string, boolean>>({});
   const [loadingDetailId, setLoadingDetailId] = useState<number | null>(null);
 
+  // Quiz Mode states
+  const [quizMode, setQuizMode] = useState<'study' | 'quiz' | 'review'>('quiz');
+  const [solvedMoveIdx, setSolvedMoveIdx] = useState<number>(-1);
+  const [quizMistakes, setQuizMistakes] = useState<number[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<{ moveIdx: number; count: number }[]>([]);
+  const [currentReviewIdx, setCurrentReviewIdx] = useState<number>(0);
+  const [quizStatus, setQuizStatus] = useState<'playing' | 'completed' | 'reviewing'>('playing');
+  const [quizFeedback, setQuizFeedback] = useState<{ type: 'success' | 'error'; text: string; square?: string } | null>(null);
+
+  // Clear quiz feedback after 1.2 seconds
+  useEffect(() => {
+    if (!quizFeedback) return;
+    const timer = setTimeout(() => {
+      setQuizFeedback(null);
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [quizFeedback]);
+
+  // Opponent Auto-play logic (Computer moves)
+  useEffect(() => {
+    if (mode !== 'book-explorer' || quizMode !== 'quiz' || !activeBookLine || quizStatus !== 'playing') return;
+
+    const nextIdx = solvedMoveIdx + 1;
+    if (nextIdx >= activeBookLine.moves.length) {
+      setQuizStatus('completed');
+      return;
+    }
+
+    const nextMove = activeBookLine.moves[nextIdx];
+    const isPlayerWhite = activeBookLine.color === 'w';
+    const isNextMoveWhite = nextMove.ply % 2 === 1;
+    const isComputerTurn = (isPlayerWhite && !isNextMoveWhite) || (!isPlayerWhite && isNextMoveWhite);
+
+    if (isComputerTurn) {
+      const timer = setTimeout(() => {
+        setActiveBookMoveIdx(nextIdx);
+        setSolvedMoveIdx(nextIdx);
+        playMoveSound(nextMove.san.includes('x'));
+        
+        if (nextIdx + 1 >= activeBookLine.moves.length) {
+          setQuizStatus('completed');
+        }
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [mode, quizMode, activeBookLine?.id, solvedMoveIdx, quizStatus]);
+
+  const isMoveVisible = useCallback((moveIdx: number) => {
+    if (quizMode === 'study') return true;
+    if (quizMode === 'quiz') return moveIdx <= solvedMoveIdx;
+    if (quizMode === 'review') {
+      if (reviewQueue.length === 0) return true;
+      return moveIdx < reviewQueue[currentReviewIdx].moveIdx;
+    }
+    return false;
+  }, [quizMode, solvedMoveIdx, reviewQueue, currentReviewIdx]);
+
   const { ready, evaluation, analyse } = useStockfish();
   const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
@@ -325,6 +382,14 @@ export function ChessAnalysis() {
           });
           setActiveBookMoveIdx(-1);
           setOrientation(data.line.color === 'b' ? 'black' : 'white');
+          // Reset Quiz States
+          setQuizMode('quiz');
+          setSolvedMoveIdx(-1);
+          setQuizMistakes([]);
+          setReviewQueue([]);
+          setCurrentReviewIdx(0);
+          setQuizStatus('playing');
+          setQuizFeedback(null);
         }
       }
     } catch (err) {
@@ -347,7 +412,13 @@ export function ChessAnalysis() {
         }
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        if (activeBookMoveIdx < activeBookLine.moves.length - 1) {
+        const maxAllowedIdx = quizMode === 'study' 
+          ? activeBookLine.moves.length - 1 
+          : quizMode === 'review'
+            ? (reviewQueue.length > 0 ? reviewQueue[currentReviewIdx].moveIdx - 1 : -1)
+            : solvedMoveIdx;
+
+        if (activeBookMoveIdx < maxAllowedIdx) {
           const nextIdx = activeBookMoveIdx + 1;
           setActiveBookMoveIdx(nextIdx);
           const nextMove = activeBookLine.moves[nextIdx];
@@ -357,7 +428,7 @@ export function ChessAnalysis() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, activeBookLine, activeBookMoveIdx]);
+  }, [mode, activeBookLine, activeBookMoveIdx, quizMode, solvedMoveIdx, reviewQueue, currentReviewIdx]);
 
   const toggleOpeningExpanded = (opId: number | string) => {
     setExpandedOpenings(prev => ({ ...prev, [opId]: !prev[opId] }));
@@ -448,6 +519,103 @@ export function ChessAnalysis() {
   // Interactive piece drop
   const onPieceDrop = useCallback(
     ({ sourceSquare, targetSquare, piece }: any) => {
+      if (mode === 'book-explorer') {
+        if (!activeBookLine) return false;
+
+        if (quizMode === 'study') {
+          const nextIdx = activeBookMoveIdx + 1;
+          if (nextIdx >= activeBookLine.moves.length) return false;
+          const nextMove = activeBookLine.moves[nextIdx];
+          const promo = getPromotionPiece(piece.pieceType, targetSquare);
+          const userUci = `${sourceSquare}${targetSquare}${promo || ''}`;
+          if (userUci === nextMove.uci) {
+            setActiveBookMoveIdx(nextIdx);
+            playMoveSound(nextMove.san.includes('x'));
+            return true;
+          }
+          return false;
+        }
+
+        if (quizMode === 'quiz') {
+          if (quizStatus !== 'playing') return false;
+          if (activeBookMoveIdx !== solvedMoveIdx) {
+            setQuizFeedback({ type: 'error', text: 'Navigate to the current position to play the move!', square: targetSquare });
+            return false;
+          }
+
+          const nextIdx = activeBookMoveIdx + 1;
+          if (nextIdx >= activeBookLine.moves.length) return false;
+          const expectedMove = activeBookLine.moves[nextIdx];
+
+          const promo = getPromotionPiece(piece.pieceType, targetSquare);
+          const userUci = `${sourceSquare}${targetSquare}${promo || ''}`;
+
+          if (userUci === expectedMove.uci) {
+            setQuizFeedback({ type: 'success', text: 'Correct!', square: targetSquare });
+            setActiveBookMoveIdx(nextIdx);
+            setSolvedMoveIdx(nextIdx);
+            playMoveSound(expectedMove.san.includes('x'));
+            return true;
+          } else {
+            setQuizFeedback({ type: 'error', text: 'Wrong!', square: targetSquare });
+            if (!quizMistakes.includes(nextIdx)) {
+              setQuizMistakes(prev => [...prev, nextIdx]);
+            }
+            return false;
+          }
+        }
+
+        if (quizMode === 'review') {
+          if (reviewQueue.length === 0) return false;
+          const reviewItem = reviewQueue[currentReviewIdx];
+          const expectedMove = activeBookLine.moves[reviewItem.moveIdx];
+
+          if (activeBookMoveIdx !== reviewItem.moveIdx - 1) {
+            setQuizFeedback({ type: 'error', text: 'Navigate to the review position to play!', square: targetSquare });
+            return false;
+          }
+
+          const promo = getPromotionPiece(piece.pieceType, targetSquare);
+          const userUci = `${sourceSquare}${targetSquare}${promo || ''}`;
+
+          if (userUci === expectedMove.uci) {
+            playMoveSound(expectedMove.san.includes('x'));
+            
+            // Render the played move immediately on the board
+            setActiveBookMoveIdx(reviewItem.moveIdx);
+
+            const nextCount = reviewItem.count - 1;
+            if (nextCount > 0) {
+              setQuizFeedback({ type: 'success', text: `Correct! Solve it ${nextCount} more time${nextCount > 1 ? 's' : ''}.`, square: targetSquare });
+              setReviewQueue(prev => prev.map((item, idx) => idx === currentReviewIdx ? { ...item, count: nextCount } : item));
+              setTimeout(() => {
+                setActiveBookMoveIdx(reviewItem.moveIdx - 1);
+              }, 1000);
+            } else {
+              setQuizFeedback({ type: 'success', text: 'Cleared!', square: targetSquare });
+              const updatedQueue = reviewQueue.filter((_, idx) => idx !== currentReviewIdx);
+              setTimeout(() => {
+                setReviewQueue(updatedQueue);
+                if (updatedQueue.length === 0) {
+                  setQuizStatus('completed');
+                } else {
+                  const nextReviewIdx = currentReviewIdx >= updatedQueue.length ? 0 : currentReviewIdx;
+                  setCurrentReviewIdx(nextReviewIdx);
+                  setActiveBookMoveIdx(updatedQueue[nextReviewIdx].moveIdx - 1);
+                }
+              }, 1000);
+            }
+            return true;
+          } else {
+            setQuizFeedback({ type: 'error', text: 'Wrong!', square: targetSquare });
+            setReviewQueue(prev => prev.map((item, idx) => idx === currentReviewIdx ? { ...item, count: 2 } : item));
+            return false;
+          }
+        }
+
+        return false;
+      }
+
       setExplorerLine(null);
       const promo = getPromotionPiece(piece.pieceType, targetSquare);
       const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
@@ -456,7 +624,10 @@ export function ChessAnalysis() {
       updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen, orientation);
       return true;
     },
-    [currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation]
+    [
+      mode, activeBookLine, quizMode, quizStatus, activeBookMoveIdx, solvedMoveIdx, quizMistakes, reviewQueue, currentReviewIdx,
+      currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation
+    ]
   );
 
   const playUciMove = useCallback((uci: string) => {
@@ -605,14 +776,34 @@ export function ChessAnalysis() {
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
       const show = !!(square === annotationSquare && currentAnnotation?.types?.length);
+      const hasQuizFeedback = mode === 'book-explorer' && quizFeedback && square === quizFeedback.square;
       return (
         <div className="relative w-full h-full">
           {children}
           {show && <SquareAnnotations types={currentAnnotation.types} />}
+          {hasQuizFeedback && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-30 animate-scale-up">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 shadow-lg ${
+                quizFeedback.type === 'success' 
+                  ? 'bg-zinc-900/95 border-emerald-500 text-emerald-400' 
+                  : 'bg-zinc-900/95 border-red-500 text-red-400'
+              }`}>
+                {quizFeedback.type === 'success' ? (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       );
     },
-    [annotationSquare, currentAnnotation]
+    [annotationSquare, currentAnnotation, mode, quizFeedback]
   );
 
   const evalLabel = () => {
@@ -681,7 +872,18 @@ export function ChessAnalysis() {
               </>
             ) : null
           )}
-          <button onClick={() => { setMode(mode === 'book-explorer' ? 'analysis' : 'book-explorer'); setActiveBookLine(null); setActiveBookMoveIdx(-1); }}
+          <button onClick={() => { 
+            setMode(mode === 'book-explorer' ? 'analysis' : 'book-explorer'); 
+            setActiveBookLine(null); 
+            setActiveBookMoveIdx(-1);
+            setQuizMode('quiz');
+            setSolvedMoveIdx(-1);
+            setQuizMistakes([]);
+            setReviewQueue([]);
+            setCurrentReviewIdx(0);
+            setQuizStatus('playing');
+            setQuizFeedback(null);
+          }}
             className={`text-xs px-3 py-1 rounded transition-colors cursor-pointer ${mode === 'book-explorer' ? 'bg-blue-600 hover:bg-blue-500 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'}`}>
             📖 Book Lines
           </button>
@@ -760,8 +962,8 @@ export function ChessAnalysis() {
               options={{
                 position: boardFen,
                 boardOrientation: orientation,
-                arrows: mode === 'book-explorer' ? loadedArrows : [],
-                allowDrawingArrows: true,
+                arrows: mode === 'book-explorer' && (quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx) ? loadedArrows : [],
+                allowDrawingArrows: quizMode === 'study' || activeBookMoveIdx <= solvedMoveIdx,
                 animationDurationInMs: 150,
                 darkSquareStyle: { backgroundColor: '#b58863' },
                 lightSquareStyle: { backgroundColor: '#f0d9b5' },
@@ -769,6 +971,7 @@ export function ChessAnalysis() {
                 squareRenderer,
                 onArrowsChange: ({ arrows }) => {
                   if (mode !== 'book-explorer' || activeBookMoveIdx < 0) return;
+                  if (quizMode !== 'study' && activeBookMoveIdx > solvedMoveIdx) return;
                   const newArrows = arrows.map((a: any) => {
                     const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
                     const endSquare = a.endSquare || (Array.isArray(a) ? a[1] : '');
@@ -787,7 +990,7 @@ export function ChessAnalysis() {
             >
               <Chessboard />
             </ChessboardProvider>
-            <CustomBoardArrows arrows={arrows} orientation={orientation} />
+            <CustomBoardArrows arrows={mode === 'book-explorer' && quizMode !== 'study' ? [] : arrows} orientation={orientation} />
           </div>
           <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>
             <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => { setCursor(i); setExplorerLine(null); }} />
@@ -807,6 +1010,13 @@ export function ChessAnalysis() {
                         onClick={() => {
                           setActiveBookLine(null);
                           setActiveBookMoveIdx(-1);
+                          setQuizMode('quiz');
+                          setSolvedMoveIdx(-1);
+                          setQuizMistakes([]);
+                          setReviewQueue([]);
+                          setCurrentReviewIdx(0);
+                          setQuizStatus('playing');
+                          setQuizFeedback(null);
                         }}
                         className="text-xs text-zinc-400 hover:text-zinc-205 transition-colors flex items-center gap-1 cursor-pointer bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded"
                       >
@@ -847,148 +1057,328 @@ export function ChessAnalysis() {
                       </div>
                     )}
                   </div>
-                  <h2 className="text-md font-bold text-zinc-100 mb-4 flex items-center gap-1 shrink-0">
+                  <h2 className="text-md font-bold text-zinc-100 mb-2 flex items-center gap-1 shrink-0">
                     📖 {activeBookLine.name}
                   </h2>
 
-                  <div className="p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2 mb-4 shrink-0">
-                    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1">Variation Moves</div>
-                    <div className="flex flex-wrap gap-1 items-center">
+                  {/* Mode selector tab */}
+                  <div className="flex bg-zinc-900 border border-zinc-800 rounded-lg p-0.5 mb-4 shrink-0 font-sans">
+                    <button
+                      onClick={() => {
+                        setQuizMode('study');
+                        setQuizStatus('playing');
+                      }}
+                      className={`flex-1 text-center py-1.5 rounded text-xs font-semibold cursor-pointer transition-colors ${quizMode === 'study' ? 'bg-zinc-800 text-zinc-100' : 'bg-transparent text-zinc-400 hover:text-zinc-200'}`}
+                    >
+                      📖 Study Mode
+                    </button>
+                    <button
+                      onClick={() => {
+                        setQuizMode('quiz');
+                        setSolvedMoveIdx(-1);
+                        setQuizMistakes([]);
+                        setReviewQueue([]);
+                        setCurrentReviewIdx(0);
+                        setQuizStatus('playing');
+                        setQuizFeedback(null);
+                        setActiveBookMoveIdx(-1);
+                      }}
+                      className={`flex-1 text-center py-1.5 rounded text-xs font-semibold cursor-pointer transition-colors ${quizMode !== 'study' ? 'bg-zinc-800 text-zinc-100' : 'bg-transparent text-zinc-400 hover:text-zinc-200'}`}
+                    >
+                      🎯 Quiz Mode
+                    </button>
+                  </div>
+
+                  {quizStatus === 'completed' && quizMode !== 'study' ? (
+                    // Quiz Completed Dashboard
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-zinc-900 border border-zinc-850 rounded-xl space-y-4 text-center my-4 font-sans">
+                      {quizMode === 'quiz' && quizMistakes.length > 0 ? (
+                        <>
+                          <div className="text-3xl">📝</div>
+                          <h3 className="text-lg font-bold text-zinc-100">Quiz Completed!</h3>
+                          <p className="text-xs text-zinc-400 max-w-sm">
+                            You completed the variation, but made <span className="text-orange-400 font-bold font-mono">{quizMistakes.length}</span> mistake{quizMistakes.length > 1 ? 's' : ''}. Let's review them to build muscle memory!
+                          </p>
+                          <button
+                            onClick={() => {
+                              setQuizMode('review');
+                              setQuizStatus('reviewing');
+                              const queue = quizMistakes.map(moveIdx => ({ moveIdx, count: 2 }));
+                              setReviewQueue(queue);
+                              setCurrentReviewIdx(0);
+                              setActiveBookMoveIdx(queue[0].moveIdx - 1);
+                              setQuizFeedback(null);
+                            }}
+                            className="text-xs px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full max-w-xs"
+                          >
+                            Start Mistake Review (2 Reps Each)
+                          </button>
+                        </>
+                      ) : quizMode === 'quiz' && quizMistakes.length === 0 ? (
+                        <>
+                          <div className="text-3xl">🏆</div>
+                          <h3 className="text-lg font-bold text-emerald-400">Perfect Quiz!</h3>
+                          <p className="text-xs text-zinc-400 max-w-sm">
+                            Amazing job! You solved every move correctly on the first try.
+                          </p>
+                          <button
+                            onClick={() => {
+                              setSolvedMoveIdx(-1);
+                              setQuizMistakes([]);
+                              setQuizStatus('playing');
+                              setActiveBookMoveIdx(-1);
+                              setQuizFeedback(null);
+                            }}
+                            className="text-xs px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full max-w-xs"
+                          >
+                            Play Again
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-3xl">🧠</div>
+                          <h3 className="text-lg font-bold text-emerald-400">Mistakes Mastered!</h3>
+                          <p className="text-xs text-zinc-400 max-w-sm">
+                            You repeated every mistake 2 times correctly. Spaced repetition power-up achieved!
+                          </p>
+                          <button
+                            onClick={() => {
+                              setQuizMode('quiz');
+                              setSolvedMoveIdx(-1);
+                              setQuizMistakes([]);
+                              setReviewQueue([]);
+                              setCurrentReviewIdx(0);
+                              setQuizStatus('playing');
+                              setQuizFeedback(null);
+                              setActiveBookMoveIdx(-1);
+                            }}
+                            className="text-xs px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors cursor-pointer w-full max-w-xs"
+                          >
+                            Restart Quiz
+                          </button>
+                        </>
+                      )}
+
                       <button
                         onClick={() => {
-                          setActiveBookMoveIdx(-1);
-                          playMoveSound(false);
+                          setQuizMode('study');
+                          setQuizStatus('playing');
                         }}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${activeBookMoveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-350'}`}
+                        className="text-xs px-4 py-2 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-semibold border border-zinc-700 transition-colors cursor-pointer w-full max-w-xs"
                       >
-                        Start
+                        Switch to Study Mode
                       </button>
-                      {activeBookLine.moves.map((move: any, moveIdx: number) => {
-                        const isCurrent = activeBookMoveIdx === moveIdx;
-                        return (
-                          <button
-                            key={moveIdx}
-                            onClick={() => {
-                              setActiveBookMoveIdx(moveIdx);
-                              playMoveSound(move.san.includes('x'));
-                            }}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrent ? 'bg-blue-900/60 border-blue-700 text-blue-105 font-bold' : 'bg-zinc-950 border-zinc-900 text-zinc-450 hover:text-zinc-200'}`}
-                          >
-                            {move.san}
-                          </button>
-                        );
-                      })}
                     </div>
-                  </div>
-
-                  <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4 flex flex-col shrink-0">
-                    <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Move Notes & Visual Annotations</div>
-                    {activeBookMoveIdx === -1 ? (
-                      <div className="text-xs text-zinc-455 italic py-2">Select a move to see or add notes.</div>
-                    ) : (
-                      <div className="space-y-3 font-sans">
-                        <div className="text-xs text-zinc-350 flex items-center justify-between">
-                          <span>
-                            Notes for <span className="font-mono font-bold text-blue-300">{activeBookLine.moves[activeBookMoveIdx].san}</span> (move {Math.floor((activeBookLine.moves[activeBookMoveIdx].ply + 1) / 2)}{activeBookLine.moves[activeBookMoveIdx].ply % 2 === 1 ? '.' : '...'}):
-                          </span>
-                          <span className="text-[10px] text-zinc-500 italic">Right-click + drag to draw arrows</span>
+                  ) : (
+                    // Active Play View
+                    <>
+                      {quizMode === 'review' && reviewQueue.length > 0 && (
+                        <div className="p-3 bg-orange-955/20 border border-orange-900/40 rounded-lg space-y-1 mb-4 shrink-0 font-sans">
+                          <div className="text-orange-400 text-[10px] uppercase font-bold tracking-wider">Review Mode: Repeating Mistakes</div>
+                          <div className="text-xs text-zinc-350 flex justify-between">
+                            <span>
+                              Mistake {currentReviewIdx + 1} of {reviewQueue.length} (Move index {reviewQueue[currentReviewIdx].moveIdx})
+                            </span>
+                            <span className="font-bold text-orange-450">
+                              Reps left: {reviewQueue[currentReviewIdx].count}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-zinc-500">
+                            Play the correct move for {activeBookLine.color === 'w' ? 'White' : 'Black'} twice in a row!
+                          </div>
                         </div>
-                        <textarea
-                          value={activeBookNote}
-                          onChange={(e) => setActiveBookNote(e.target.value)}
-                          placeholder="Add your notes about why this move is played..."
-                          className="w-full h-24 bg-zinc-955 border border-zinc-800 rounded p-2 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200"
-                        />
-                        <div className="flex justify-end items-center gap-2">
-                          {(loadedArrows.length > 0 || drawnArrows.length > 0) && (
-                            <button
-                              onClick={async () => {
-                                setLoadedArrows([]);
-                                setDrawnArrows([]);
-                                setBoardKey(k => k + 1);
-                                if (activeBookLine && activeBookMoveIdx >= 0) {
-                                  try {
-                                    const activeMove = activeBookLine.moves[activeBookMoveIdx];
-                                    const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
-                                      if (idx === activeBookMoveIdx) {
-                                        return { ...m, arrows: null };
-                                      }
-                                      return m;
-                                    });
-                                    setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
-                                    await fetch('/api/book-lines', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({
-                                        lineId: activeBookLine.id,
-                                        ply: activeMove.ply,
-                                        comment: activeBookNote,
-                                        arrows: []
-                                      })
-                                    });
-                                  } catch (err) {
-                                    console.error('Error clearing arrows in db:', err);
-                                  }
-                                }
-                              }}
-                              className="text-xs px-2.5 py-1.5 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-semibold border border-zinc-700 transition-colors cursor-pointer mr-auto"
-                            >
-                              Clear Arrows
-                            </button>
+                      )}
+
+
+                      <div className="p-3 bg-zinc-900 border border-zinc-850 rounded-lg space-y-2 mb-4 shrink-0">
+                        <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1 flex items-center justify-between">
+                          <span>Variation Moves</span>
+                          {quizMode !== 'study' && (
+                            <span className="text-[9px] text-zinc-500 normal-case font-normal font-sans">
+                              {quizMode === 'quiz' ? 'Find the moves' : 'Review your mistakes'}
+                            </span>
                           )}
-                          {saveNoteSuccess && (
-                            <span className="text-[11px] text-emerald-400 font-semibold animate-pulse">✓ Saved!</span>
-                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-1 items-center">
                           <button
-                            onClick={handleSaveNote}
-                            disabled={isSavingNote}
-                            className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                            onClick={() => {
+                              setActiveBookMoveIdx(-1);
+                              playMoveSound(false);
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${activeBookMoveIdx === -1 ? 'bg-zinc-850 border-zinc-700 text-zinc-100 font-bold' : 'bg-zinc-955 border-zinc-900 text-zinc-500 hover:text-zinc-350'}`}
                           >
-                            {isSavingNote ? 'Saving...' : 'Save Notes'}
+                            Start
                           </button>
+                          {activeBookLine.moves.map((move: any, moveIdx: number) => {
+                            const isCurrent = activeBookMoveIdx === moveIdx;
+                            const isVisible = isMoveVisible(moveIdx);
+                            if (isVisible) {
+                              return (
+                                <button
+                                  key={moveIdx}
+                                  onClick={() => {
+                                    setActiveBookMoveIdx(moveIdx);
+                                    playMoveSound(move.san.includes('x'));
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${isCurrent ? 'bg-blue-900/60 border-blue-700 text-blue-105 font-bold' : 'bg-zinc-955 border-zinc-900 text-zinc-450 hover:text-zinc-200'}`}
+                                >
+                                  {move.san}
+                                </button>
+                              );
+                            } else {
+                              return (
+                                <span
+                                  key={moveIdx}
+                                  className="px-1.5 py-0.5 rounded text-[10px] font-mono border bg-zinc-955 border-zinc-900/60 text-zinc-650 select-none cursor-default"
+                                  title="Hidden until solved"
+                                >
+                                  ??
+                                </span>
+                              );
+                            }
+                          })}
                         </div>
                       </div>
-                    )}
-                  </div>
 
-                  {/* Engine Analysis */}
-                  <div className="px-3 py-2 border border-zinc-900 bg-zinc-950 rounded-lg flex-1 overflow-y-auto">
-                    <div className="flex items-baseline justify-between mb-2">
-                      <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Engine Analysis</span>
-                      <span className="text-xs text-zinc-505 font-mono">depth {evaluation.depth}</span>
-                    </div>
-                    <div className="flex items-baseline justify-between mb-2">
-                      <span className="text-xl font-bold font-mono tabular-nums">{evalLabel()}</span>
-                    </div>
-                    <div className="space-y-1.5">
-                      {evaluation.lines && evaluation.lines.length > 0 ? (
-                        evaluation.lines.slice(0, 3).map((line: any, idx: number) => (
-                          <EngineLineRow key={idx} line={line} startFen={boardFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
-                        ))
+                      <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg shadow-md mb-4 flex flex-col shrink-0">
+                        <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Move Notes & Visual Annotations</div>
+                        {!isMoveVisible(activeBookMoveIdx) || activeBookMoveIdx === -1 ? (
+                          <div className="text-xs text-zinc-455 italic py-2 font-sans">
+                            {activeBookMoveIdx === -1 
+                              ? 'Select a move to see or add notes.' 
+                              : quizMode === 'review'
+                                ? 'Notes are hidden during mistake review.'
+                                : 'Notes and annotations are hidden until this move is solved!'}
+                          </div>
+                        ) : (
+                          <div className="space-y-3 font-sans">
+                            <div className="text-xs text-zinc-350 flex items-center justify-between">
+                              <span>
+                                Notes for <span className="font-mono font-bold text-blue-300">{activeBookLine.moves[activeBookMoveIdx].san}</span> (move {Math.floor((activeBookLine.moves[activeBookMoveIdx].ply + 1) / 2)}{activeBookLine.moves[activeBookMoveIdx].ply % 2 === 1 ? '.' : '...'}):
+                              </span>
+                              <span className="text-[10px] text-zinc-500 italic">Right-click + drag to draw arrows</span>
+                            </div>
+                            <textarea
+                              value={activeBookNote}
+                              onChange={(e) => setActiveBookNote(e.target.value)}
+                              placeholder="Add your notes about why this move is played..."
+                              className="w-full h-24 bg-zinc-955 border border-zinc-800 rounded p-2 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200"
+                            />
+                            <div className="flex justify-end items-center gap-2">
+                              {(loadedArrows.length > 0 || drawnArrows.length > 0) && (
+                                <button
+                                  onClick={async () => {
+                                    setLoadedArrows([]);
+                                    setDrawnArrows([]);
+                                    setBoardKey(k => k + 1);
+                                    if (activeBookLine && activeBookMoveIdx >= 0) {
+                                      try {
+                                        const activeMove = activeBookLine.moves[activeBookMoveIdx];
+                                        const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
+                                          if (idx === activeBookMoveIdx) {
+                                            return { ...m, arrows: null };
+                                          }
+                                          return m;
+                                        });
+                                        setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
+                                        await fetch('/api/book-lines', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({
+                                            lineId: activeBookLine.id,
+                                            ply: activeMove.ply,
+                                            comment: activeBookNote,
+                                            arrows: []
+                                          })
+                                        });
+                                      } catch (err) {
+                                        console.error('Error clearing arrows in db:', err);
+                                      }
+                                    }
+                                  }}
+                                  className="text-xs px-2.5 py-1.5 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-semibold border border-zinc-700 transition-colors cursor-pointer mr-auto"
+                                >
+                                  Clear Arrows
+                                </button>
+                              )}
+                              {saveNoteSuccess && (
+                                <span className="text-[11px] text-emerald-400 font-semibold animate-pulse">✓ Saved!</span>
+                              )}
+                              <button
+                                onClick={handleSaveNote}
+                                disabled={isSavingNote}
+                                className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                              >
+                                {isSavingNote ? 'Saving...' : 'Save Notes'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Engine Analysis */}
+                      {quizMode === 'study' ? (
+                        <div className="px-3 py-2 border border-zinc-900 bg-zinc-950 rounded-lg flex-1 overflow-y-auto font-sans">
+                          <div className="flex items-baseline justify-between mb-2">
+                            <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Engine Analysis</span>
+                            <span className="text-xs text-zinc-550 font-mono">depth {evaluation.depth}</span>
+                          </div>
+                          <div className="flex items-baseline justify-between mb-2">
+                            <span className="text-xl font-bold font-mono tabular-nums">{evalLabel()}</span>
+                          </div>
+                          <div className="space-y-1.5 font-sans">
+                            {evaluation.lines && evaluation.lines.length > 0 ? (
+                              evaluation.lines.slice(0, 3).map((line: any, idx: number) => (
+                                <EngineLineRow key={idx} line={line} startFen={boardFen} userColor={orientation === 'white' ? 'w' : 'b'} onClick={() => enterVariation(line)} />
+                              ))
+                            ) : (
+                              evaluation.pv && evaluation.pv.length > 0 && (
+                                <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
+                                  {pvToSan(boardFen, evaluation.pv).join(' ')}
+                                </p>
+                              )
+                            )}
+                          </div>
+                        </div>
                       ) : (
-                        evaluation.pv && evaluation.pv.length > 0 && (
-                          <p className="text-xs text-zinc-400 break-words font-mono leading-normal">
-                            {pvToSan(boardFen, evaluation.pv).join(' ')}
-                          </p>
-                        )
+                        <div className="p-4 border border-zinc-900 bg-zinc-950 rounded-lg flex-1 flex flex-col items-center justify-center text-center text-zinc-500 font-sans">
+                          <div className="text-xl mb-1">🤫</div>
+                          <div className="text-[10px] uppercase font-bold tracking-wider">Engine Disabled</div>
+                          <div className="text-xs text-zinc-500 mt-1">Stockfish analysis is hidden during the quiz.</div>
+                        </div>
                       )}
-                    </div>
-                  </div>
 
-                  {/* Navigation keyboard arrows reminder / buttons */}
-                  <div className="flex gap-1 mt-4 shrink-0">
-                    {[
-                      { label: '⏮', action: () => { setActiveBookMoveIdx(-1); playMoveSound(false); }, title: 'Start' },
-                      { label: '◀', action: () => { if (activeBookMoveIdx > -1) { setActiveBookMoveIdx(c => c - 1); playMoveSound(false); } }, title: 'Prev (←)' },
-                      { label: '▶', action: () => { if (activeBookMoveIdx < activeBookLine.moves.length - 1) { const nextIdx = activeBookMoveIdx + 1; setActiveBookMoveIdx(nextIdx); playMoveSound(activeBookLine.moves[nextIdx].san.includes('x')); } }, title: 'Next (→)' },
-                      { label: '⏭', action: () => { const lastIdx = activeBookLine.moves.length - 1; setActiveBookMoveIdx(lastIdx); playMoveSound(activeBookLine.moves[lastIdx].san.includes('x')); }, title: 'End' },
-                    ].map(({ label, action, title }) => (
-                      <button key={label} onClick={action} title={title}
-                        className="flex-1 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-sm transition-colors border border-zinc-805 cursor-pointer">
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                      {/* Navigation keyboard arrows reminder / buttons */}
+                      <div className="flex gap-1 mt-4 shrink-0 font-sans">
+                        {(() => {
+                          const maxAllowedIdx = quizMode === 'study' 
+                            ? activeBookLine.moves.length - 1 
+                            : quizMode === 'review'
+                              ? (reviewQueue.length > 0 ? reviewQueue[currentReviewIdx].moveIdx - 1 : -1)
+                              : solvedMoveIdx;
+
+                          const navButtons = [
+                            { label: '⏮', action: () => { setActiveBookMoveIdx(-1); playMoveSound(false); }, title: 'Start', disabled: activeBookMoveIdx === -1 },
+                            { label: '◀', action: () => { if (activeBookMoveIdx > -1) { setActiveBookMoveIdx(c => c - 1); playMoveSound(false); } }, title: 'Prev (←)', disabled: activeBookMoveIdx === -1 },
+                            { label: '▶', action: () => { if (activeBookMoveIdx < maxAllowedIdx) { const nextIdx = activeBookMoveIdx + 1; setActiveBookMoveIdx(nextIdx); playMoveSound(activeBookLine.moves[nextIdx].san.includes('x')); } }, title: 'Next (→)', disabled: activeBookMoveIdx >= maxAllowedIdx },
+                            { label: '⏭', action: () => { if (maxAllowedIdx >= 0) { setActiveBookMoveIdx(maxAllowedIdx); playMoveSound(activeBookLine.moves[maxAllowedIdx].san.includes('x')); } else { setActiveBookMoveIdx(-1); playMoveSound(false); } }, title: 'End', disabled: activeBookMoveIdx === maxAllowedIdx },
+                          ];
+
+                          return navButtons.map(({ label, action, title, disabled }) => (
+                            <button
+                              key={label}
+                              onClick={action}
+                              title={title}
+                              disabled={disabled}
+                              className="flex-1 py-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-zinc-900 disabled:cursor-not-allowed text-sm transition-colors border border-zinc-805 cursor-pointer text-zinc-300 font-semibold"
+                            >
+                              {label}
+                            </button>
+                          ));
+                        })()}
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
                 // Book Lines List Explorer View
