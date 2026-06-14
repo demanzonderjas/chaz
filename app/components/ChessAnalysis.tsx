@@ -413,6 +413,16 @@ export function ChessAnalysis() {
         });
         setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
         setSaveNoteSuccess(true);
+
+        const loaded = combined.map((a: any, index: number) => ({
+          id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
+          startSquare: a.startSquare,
+          endSquare: a.endSquare,
+          color: a.color || 'rgba(168,85,247,0.85)'
+        }));
+        setLoadedArrows(loaded);
+        setDrawnArrows([]);
+        setBoardKey(k => k + 1);
       }
     } catch (err) {
       console.error('Error saving note:', err);
@@ -1290,8 +1300,8 @@ export function ChessAnalysis() {
                 position: tempWrongFen || boardFen,
                 boardOrientation: orientation,
                 arrows: mode === 'book-explorer'
-                  ? (quizMode === 'study' ? loadedArrows : [])
-                  : (mode === 'analysis' ? loadedArrows : []),
+                  ? (quizMode === 'study' ? getFilteredLoadedArrows(loadedArrows, drawnArrows) : [])
+                  : (mode === 'analysis' ? getFilteredLoadedArrows(loadedArrows, drawnArrows) : []),
                 allowDrawingArrows: mode === 'analysis' || quizMode === 'study',
                 animationDurationInMs: 150,
                 darkSquareStyle: { backgroundColor: '#b58863' },
@@ -2080,6 +2090,7 @@ export function ChessAnalysis() {
                           }));
                           setLoadedArrows(loaded);
                           setDrawnArrows([]);
+                          setBoardKey(k => k + 1);
 
                           // Sync relevantBookLine in memory!
                           if (relevantBookLine && bookLineActiveIdx >= 0) {
@@ -2217,6 +2228,11 @@ function deduplicateArrows(arrows: Arrow[]): Arrow[] {
     seen.add(key);
     return true;
   });
+}
+
+function getFilteredLoadedArrows(loaded: Arrow[], drawn: Arrow[]) {
+  const drawnKeys = new Set(drawn.map(d => `${d.startSquare}-${d.endSquare}`));
+  return loaded.filter(l => !drawnKeys.has(`${l.startSquare}-${l.endSquare}`));
 }
 
 function CustomBoardArrows({ arrows, orientation }: { arrows: Arrow[]; orientation: 'white' | 'black' }) {
