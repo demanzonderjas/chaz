@@ -123,7 +123,7 @@ class StockfishScheduler {
     if (this.lastLiveResult && line.depth > this.lastLiveResult.depth) {
       this.liveLines = [];
     }
-    line.hasSacrifice = hasSacrificeInPV(this.liveTask!.fen, line.pv, this.liveTask!.color);
+    line.hasSacrifice = hasSacrificeInPVCached(this.liveTask!.fen, line.pv, this.liveTask!.color);
     this.liveLines[line.multipv - 1] = line;
     const res = this.buildLiveResult(line);
     this.lastLiveResult = res;
@@ -459,6 +459,17 @@ function getMaterialBalance(fen: string): number {
     P: 1, N: 3, B: 3, R: 5, Q: 9
   };
   return [...board].reduce((acc, char) => acc + (values[char] || 0), 0);
+}
+
+const sacCache = new Map<string, boolean>();
+function hasSacrificeInPVCached(startFen: string, pv: string[], color: 'w' | 'b') {
+  if (!pv?.length) return false;
+  const key = `${startFen}|${pv.join(' ')}|${color}`;
+  if (sacCache.has(key)) return sacCache.get(key)!;
+  const res = hasSacrificeInPV(startFen, pv, color);
+  if (sacCache.size > 1000) sacCache.delete(sacCache.keys().next().value!);
+  sacCache.set(key, res);
+  return res;
 }
 
 function hasSacrificeInPV(startFen: string, pv: string[], color: 'w' | 'b'): boolean {

@@ -14,6 +14,7 @@ import { GameLibrary } from './GameLibrary';
 import { PuzzleArena } from './PuzzleArena';
 import { GamePuzzleArena } from './GamePuzzleArena';
 import { Dashboard } from './Dashboard';
+import { PositionNotesInput } from './PositionNotesInput';
 import { playMoveSound, playErrorSound } from '../services/sound';
 import { preprocessPgn, isUserBlack } from '../services/pgn';
 
@@ -385,51 +386,76 @@ export function ChessAnalysis() {
     }
   };
 
-  const handleSaveNote = async () => {
-    if (!activeBookLine || activeBookMoveIdx < 0) return;
-    setIsSavingNote(true);
-    try {
-      const activeMove = activeBookLine.moves[activeBookMoveIdx];
-      const combined = deduplicateArrows([...loadedArrows, ...drawnArrows]);
-      const res = await fetch('/api/book-lines', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lineId: activeBookLine.id,
-          ply: activeMove.ply,
-          comment: activeBookNote,
-          arrows: combined
-        })
-      });
-      if (res.ok) {
-        const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
-          if (idx === activeBookMoveIdx) {
-            return {
-              ...m,
-              comment: activeBookNote,
-              arrows: combined.length > 0 ? JSON.stringify(combined) : null
-            };
-          }
-          return m;
-        });
-        setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
-        setSaveNoteSuccess(true);
+  const getCombinedArrows = () => deduplicateArrows([...loadedArrows, ...drawnArrows]);
 
-        const loaded = combined.map((a: any, index: number) => ({
-          id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
-          startSquare: a.startSquare,
-          endSquare: a.endSquare,
-          color: a.color || 'rgba(168,85,247,0.85)'
-        }));
-        setLoadedArrows(loaded);
-        setDrawnArrows([]);
-        setBoardKey(k => k + 1);
-      }
-    } catch (err) {
-      console.error('Error saving note:', err);
-    } finally {
-      setIsSavingNote(false);
+  const updateLocalBookLineState = (noteVal: string, combined: any[]) => {
+    setActiveBookNote(noteVal);
+    setLoadedArrows(combined.map((a, i) => ({ id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${i}`, startSquare: a.startSquare, endSquare: a.endSquare, color: a.color || 'rgba(168,85,247,0.85)' })));
+    setDrawnArrows([]);
+    setBoardKey(k => k + 1);
+    const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => idx === activeBookMoveIdx ? { ...m, comment: noteVal, arrows: combined.length > 0 ? JSON.stringify(combined) : null } : m);
+    setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
+  };
+
+  const saveBookNote = async (noteVal: string) => {
+    if (!activeBookLine || activeBookMoveIdx < 0) return;
+    const activeMove = activeBookLine.moves[activeBookMoveIdx];
+    const combined = getCombinedArrows();
+    const body = JSON.stringify({ lineId: activeBookLine.id, ply: activeMove.ply, comment: noteVal, arrows: combined });
+    const res = await fetch('/api/book-lines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    if (res.ok) updateLocalBookLineState(noteVal, combined);
+  };
+
+  const updateLocalPositionState = (noteVal: string, combined: any[]) => {
+    setActiveBookNote(noteVal);
+    setLoadedArrows(combined.map((a, i) => ({ id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${i}`, startSquare: a.startSquare, endSquare: a.endSquare, color: a.color || 'rgba(168,85,247,0.85)' })));
+    setDrawnArrows([]);
+    setBoardKey(k => k + 1);
+    if (relevantBookLine && bookLineActiveIdx >= 0) {
+      const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => idx === bookLineActiveIdx ? { ...m, comment: noteVal, arrows: combined.length > 0 ? JSON.stringify(combined) : null } : m);
+      setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
     }
+  };
+
+  const savePositionNote = async (noteVal: string) => {
+    const combined = getCombinedArrows();
+    const body = JSON.stringify({ fen: boardFen, comment: noteVal, arrows: combined });
+    const res = await fetch('/api/book-lines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    if (res.ok) updateLocalPositionState(noteVal, combined);
+  };
+
+  const clearLocalBookArrows = () => {
+    setLoadedArrows([]);
+    setDrawnArrows([]);
+    setBoardKey(k => k + 1);
+    if (activeBookLine && activeBookMoveIdx >= 0) {
+      const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => idx === activeBookMoveIdx ? { ...m, arrows: null } : m);
+      setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
+    }
+  };
+
+  const clearBookArrows = async () => {
+    clearLocalBookArrows();
+    if (activeBookLine && activeBookMoveIdx >= 0) {
+      const body = JSON.stringify({ lineId: activeBookLine.id, ply: activeBookLine.moves[activeBookMoveIdx].ply, comment: activeBookNote, arrows: [] });
+      await fetch('/api/book-lines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(console.error);
+    }
+  };
+
+  const clearLocalPositionArrows = () => {
+    setLoadedArrows([]);
+    setDrawnArrows([]);
+    setBoardKey(k => k + 1);
+    if (relevantBookLine && bookLineActiveIdx >= 0) {
+      const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => idx === bookLineActiveIdx ? { ...m, arrows: null } : m);
+      setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
+    }
+  };
+
+  const clearPositionArrows = async () => {
+    clearLocalPositionArrows();
+    const body = JSON.stringify({ fen: boardFen, comment: activeBookNote, arrows: [] });
+    await fetch('/api/book-lines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(console.error);
   };
 
   const loadBookLineDetail = async (lineId: number) => {
@@ -1632,60 +1658,14 @@ export function ChessAnalysis() {
                               </span>
                               <span className="text-[10px] text-zinc-500 italic">Right-click + drag to draw arrows</span>
                             </div>
-                            <textarea
-                              value={activeBookNote}
-                              onChange={(e) => setActiveBookNote(e.target.value)}
+                            <PositionNotesInput
+                              note={activeBookNote}
                               placeholder="Add your notes about why this move is played..."
-                              className="w-full h-24 bg-zinc-955 border border-zinc-800 rounded p-2 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200"
+                              onSave={saveBookNote}
+                              onClearArrows={clearBookArrows}
+                              hasArrows={loadedArrows.length > 0 || drawnArrows.length > 0}
+                              heightClass="h-24"
                             />
-                            <div className="flex justify-end items-center gap-2">
-                              {(loadedArrows.length > 0 || drawnArrows.length > 0) && (
-                                <button
-                                  onClick={async () => {
-                                    setLoadedArrows([]);
-                                    setDrawnArrows([]);
-                                    setBoardKey(k => k + 1);
-                                    if (activeBookLine && activeBookMoveIdx >= 0) {
-                                      try {
-                                        const activeMove = activeBookLine.moves[activeBookMoveIdx];
-                                        const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => {
-                                          if (idx === activeBookMoveIdx) {
-                                            return { ...m, arrows: null };
-                                          }
-                                          return m;
-                                        });
-                                        setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
-                                        await fetch('/api/book-lines', {
-                                          method: 'POST',
-                                          headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify({
-                                            lineId: activeBookLine.id,
-                                            ply: activeMove.ply,
-                                            comment: activeBookNote,
-                                            arrows: []
-                                          })
-                                        });
-                                      } catch (err) {
-                                        console.error('Error clearing arrows in db:', err);
-                                      }
-                                    }
-                                  }}
-                                  className="text-xs px-2.5 py-1.5 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 font-semibold border border-zinc-700 transition-colors cursor-pointer mr-auto"
-                                >
-                                  Clear Arrows
-                                </button>
-                              )}
-                              {saveNoteSuccess && (
-                                <span className="text-[11px] text-emerald-400 font-semibold animate-pulse">✓ Saved!</span>
-                              )}
-                              <button
-                                onClick={handleSaveNote}
-                                disabled={isSavingNote}
-                                className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors disabled:opacity-50 cursor-pointer"
-                              >
-                                {isSavingNote ? 'Saving...' : 'Save Notes'}
-                              </button>
-                            </div>
                           </div>
                         )}
                       </div>
@@ -2028,104 +2008,17 @@ export function ChessAnalysis() {
                   <span>Position Notes & Annotations</span>
                   <span className="text-zinc-600 font-normal italic font-mono normal-case">Right-click + drag to draw arrows</span>
                 </div>
-                <textarea
-                  value={activeBookNote}
-                  onChange={(e) => setActiveBookNote(e.target.value)}
+                <PositionNotesInput
+                  note={activeBookNote}
                   placeholder="Save notes for this specific board position (auto-shared across all games!)..."
-                  className="w-full h-16 bg-zinc-900 border border-zinc-805 rounded p-1.5 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200"
+                  onSave={savePositionNote}
+                  onClearArrows={clearPositionArrows}
+                  hasArrows={loadedArrows.length > 0 || drawnArrows.length > 0}
+                  heightClass="h-16"
                 />
-                <div className="flex justify-end items-center gap-2">
-                  {(loadedArrows.length > 0 || drawnArrows.length > 0) && (
-                    <button
-                      onClick={async () => {
-                        setLoadedArrows([]);
-                        setDrawnArrows([]);
-                        setBoardKey(k => k + 1);
-                        try {
-                          await fetch('/api/book-lines', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              fen: boardFen,
-                              comment: activeBookNote,
-                              arrows: []
-                            })
-                          });
-                          // Sync relevantBookLine in memory!
-                          if (relevantBookLine && bookLineActiveIdx >= 0) {
-                            const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => {
-                              if (idx === bookLineActiveIdx) {
-                                return { ...m, arrows: null };
-                              }
-                              return m;
-                            });
-                            setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
-                          }
-                        } catch (err) {
-                          console.error('Error clearing position arrows:', err);
-                        }
-                      }}
-                      className="text-[10px] px-2 py-1 rounded bg-zinc-850 hover:bg-zinc-800 border border-zinc-700 text-zinc-350 transition-colors cursor-pointer mr-auto"
-                    >
-                      Clear Arrows
-                    </button>
-                  )}
-                  {saveNoteSuccess && (
-                    <span className="text-[10px] text-emerald-455 font-semibold animate-pulse">✓ Saved!</span>
-                  )}
-                  <button
-                    onClick={async () => {
-                      setIsSavingNote(true);
-                      try {
-                        const combined = [...loadedArrows, ...drawnArrows];
-                        const res = await fetch('/api/book-lines', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            fen: boardFen,
-                            comment: activeBookNote,
-                            arrows: combined
-                          })
-                        });
-                        if (res.ok) {
-                          setSaveNoteSuccess(true);
-                          const loaded = combined.map((a, index) => ({
-                            id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
-                            startSquare: a.startSquare,
-                            endSquare: a.endSquare,
-                            color: a.color || 'rgba(168,85,247,0.85)'
-                          }));
-                          setLoadedArrows(loaded);
-                          setDrawnArrows([]);
-                          setBoardKey(k => k + 1);
-
-                          // Sync relevantBookLine in memory!
-                          if (relevantBookLine && bookLineActiveIdx >= 0) {
-                            const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => {
-                              if (idx === bookLineActiveIdx) {
-                                return {
-                                  ...m,
-                                  comment: activeBookNote,
-                                  arrows: combined.length > 0 ? JSON.stringify(combined) : null
-                                };
-                              }
-                              return m;
-                            });
-                            setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
-                          }
-                        }
-                      } catch (err) {
-                        console.error('Error saving game position note:', err);
-                      } finally {
-                        setIsSavingNote(false);
-                      }
-                    }}
-                    disabled={isSavingNote}
-                    className="text-[10px] px-3 py-1 rounded bg-blue-900/80 hover:bg-blue-800/80 text-blue-100 font-semibold border border-blue-700 transition-colors cursor-pointer"
-                  >
-                    {isSavingNote ? 'Saving...' : 'Save Note'}
-                  </button>
-                </div>
+                {saveNoteSuccess && (
+                  <span className="text-[10px] text-emerald-455 font-semibold animate-pulse">✓ Saved!</span>
+                )}
               </div>
 
               {/* Db Explorer */}
