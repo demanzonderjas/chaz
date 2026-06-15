@@ -21,6 +21,61 @@ import { preprocessPgn, isUserBlack } from '../services/pgn';
 
 type Arrow = { id?: string; startSquare: string; endSquare: string; color: string };
 
+function deduplicateArrows(arrows: Arrow[]): Arrow[] {
+  const seen = new Set<string>();
+  return arrows.filter(a => {
+    const key = `${a.startSquare}-${a.endSquare}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function parseArrowItem(a: any, idx: number): Arrow {
+  const isArr = Array.isArray(a);
+  const start = isArr ? a[0] : a.startSquare;
+  const end = isArr ? a[1] : a.endSquare;
+  const color = (isArr ? a[2] : a.color) || 'rgba(168,85,247,0.85)';
+  const id = isArr ? `loaded-${start}-${end}-${idx}` : (a.id || `loaded-${start}-${end}-${idx}`);
+  return { id, startSquare: start, endSquare: end, color };
+}
+
+function parseArrows(arrowsStr: string): Arrow[] {
+  try {
+    const parsed = JSON.parse(arrowsStr);
+    const raw = Array.isArray(parsed) ? parsed : [];
+    return deduplicateArrows(raw.map((a, i) => parseArrowItem(a, i)));
+  } catch {
+    return [];
+  }
+}
+
+type PositionSetters = {
+  setNote: (n: string) => void;
+  setLoaded: (a: Arrow[]) => void;
+  setDrawn: (a: Arrow[]) => void;
+  setSuccess: (s: boolean) => void;
+};
+
+function applyPosition(comment: string, arrows: string, s: PositionSetters) {
+  s.setNote(comment);
+  s.setLoaded(parseArrows(arrows));
+  s.setDrawn([]);
+  s.setSuccess(false);
+}
+
+function fetchBookLine(fen: string, cb: (d: any) => void): () => void {
+  let active = true;
+  const t = setTimeout(() => {
+    fetch(`/api/book-lines?positionFen=${encodeURIComponent(fen)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => active && cb(d))
+      .catch(() => active && cb(null));
+  }, 150);
+  return () => { active = false; clearTimeout(t); };
+}
+
+
 const ANNOTATION_ICONS: Record<string, { symbol: string; bg: string; text: string }> = {
   book:        { symbol: '📖',   bg: '#2563eb', text: '#ffffff' },
   brilliant:   { symbol: '!!',   bg: '#0d9488', text: '#ffffff' },
@@ -226,8 +281,12 @@ export function ChessAnalysis() {
 
   useEffect(() => {
     if (!ready || analyzing) return;
-    analyse(boardFen, boardColor, 16);
+    const timer = setTimeout(() => {
+      analyse(boardFen, boardColor, 16);
+    }, 200);
+    return () => clearTimeout(timer);
   }, [ready, boardFen, boardColor, analyse, analyzing]);
+
 
   // Keyboard navigation
   useEffect(() => {
@@ -286,43 +345,14 @@ export function ChessAnalysis() {
   }, [mode, groupedOpenings.length]);
 
   useEffect(() => {
-    if (activeBookLine && activeBookMoveIdx >= 0) {
-      const activeMove = activeBookLine.moves[activeBookMoveIdx];
-      setActiveBookNote(activeMove.comment || '');
-      if (activeMove.arrows) {
-        try {
-          const parsed = JSON.parse(activeMove.arrows);
-          const loaded = parsed.map((a: any, index: number) => {
-            if (Array.isArray(a)) {
-              return {
-                id: `loaded-${a[0]}-${a[1]}-${index}`,
-                startSquare: a[0],
-                endSquare: a[1],
-                color: a[2] || 'rgba(168,85,247,0.85)'
-              };
-            }
-            return {
-              id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
-              startSquare: a.startSquare,
-              endSquare: a.endSquare,
-              color: a.color || 'rgba(168,85,247,0.85)'
-            };
-          });
-          setLoadedArrows(deduplicateArrows(loaded));
-        } catch {
-          setLoadedArrows([]);
-        }
-      } else {
-        setLoadedArrows([]);
-      }
-    } else {
-      setActiveBookNote('');
-      setLoadedArrows([]);
-    }
+    const activeMove = activeBookLine && activeBookMoveIdx >= 0 ? activeBookLine.moves[activeBookMoveIdx] : null;
+    setActiveBookNote(activeMove?.comment || '');
+    setLoadedArrows(parseArrows(activeMove?.arrows || ''));
     setDrawnArrows([]);
     setSaveNoteSuccess(false);
     setTempWrongFen(null);
   }, [activeBookLine?.id, activeBookMoveIdx]);
+
 
   const autoSaveAnalysisArrows = async (newDrawn: Arrow[]) => {
     try {
@@ -653,87 +683,15 @@ export function ChessAnalysis() {
 
   useEffect(() => {
     if (mode !== 'analysis') return;
-
-    // Check if we can load it from relevantBookLine in memory first
+    const setters = { setNote: setActiveBookNote, setLoaded: setLoadedArrows, setDrawn: setDrawnArrows, setSuccess: setSaveNoteSuccess };
     if (relevantBookLine && bookLineActiveIdx >= 0) {
-      const activeMove = relevantBookLine.moves[bookLineActiveIdx];
-      setActiveBookNote(activeMove.comment || '');
-      if (activeMove.arrows) {
-        try {
-          const parsed = JSON.parse(activeMove.arrows);
-          const loaded = parsed.map((a: any, index: number) => {
-            if (Array.isArray(a)) {
-              return {
-                id: `loaded-${a[0]}-${a[1]}-${index}`,
-                startSquare: a[0],
-                endSquare: a[1],
-                color: a[2] || 'rgba(168,85,247,0.85)'
-              };
-            }
-            return {
-              id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
-              startSquare: a.startSquare,
-              endSquare: a.endSquare,
-              color: a.color || 'rgba(168,85,247,0.85)'
-            };
-          });
-          setLoadedArrows(deduplicateArrows(loaded));
-        } catch {
-          setLoadedArrows([]);
-        }
-      } else {
-        setLoadedArrows([]);
-      }
-      setDrawnArrows([]);
-      setSaveNoteSuccess(false);
+      const m = relevantBookLine.moves[bookLineActiveIdx];
+      applyPosition(m.comment || '', m.arrows || '', setters);
       return;
     }
-
-    fetch(`/api/book-lines?positionFen=${encodeURIComponent(boardFen)}`)
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (data) {
-          setActiveBookNote(data.comment || '');
-          if (data.arrows) {
-            try {
-              const parsed = JSON.parse(data.arrows);
-              const loaded = parsed.map((a: any, index: number) => {
-                if (Array.isArray(a)) {
-                  return {
-                    id: `loaded-${a[0]}-${a[1]}-${index}`,
-                    startSquare: a[0],
-                    endSquare: a[1],
-                    color: a[2] || 'rgba(168,85,247,0.85)'
-                  };
-                }
-                return {
-                  id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
-                  startSquare: a.startSquare,
-                  endSquare: a.endSquare,
-                  color: a.color || 'rgba(168,85,247,0.85)'
-                };
-              });
-              setLoadedArrows(deduplicateArrows(loaded));
-            } catch {
-              setLoadedArrows([]);
-            }
-          } else {
-            setLoadedArrows([]);
-          }
-        } else {
-          setActiveBookNote('');
-          setLoadedArrows([]);
-        }
-        setDrawnArrows([]);
-        setSaveNoteSuccess(false);
-      })
-      .catch(() => {
-        setActiveBookNote('');
-        setLoadedArrows([]);
-        setDrawnArrows([]);
-        setSaveNoteSuccess(false);
-      });
+    return fetchBookLine(boardFen, (d) => applyPosition(d?.comment || '', d?.arrows || '', setters));
   }, [mode, boardFen, relevantBookLine, bookLineActiveIdx]);
+
 
   // Interactive piece drop
   const onPieceDrop = useCallback(
@@ -1105,28 +1063,7 @@ export function ChessAnalysis() {
   if (mode !== 'book-explorer' && mode !== 'analysis' && relevantBookLine && bookLineActiveIdx >= 0) {
     const activeMove = relevantBookLine.moves[bookLineActiveIdx];
     if (activeMove && activeMove.arrows) {
-      try {
-        const parsed = JSON.parse(activeMove.arrows);
-        const gameBookArrows = parsed.map((a: any, index: number) => {
-          if (Array.isArray(a)) {
-            return {
-              id: `loaded-${a[0]}-${a[1]}-${index}`,
-              startSquare: a[0],
-              endSquare: a[1],
-              color: a[2] || 'rgba(168,85,247,0.85)'
-            };
-          }
-          return {
-            id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${index}`,
-            startSquare: a.startSquare,
-            endSquare: a.endSquare,
-            color: a.color || 'rgba(168,85,247,0.85)'
-          };
-        });
-        arrows.push(...gameBookArrows);
-      } catch (e) {
-        console.error('Error parsing game book arrows', e);
-      }
+      arrows.push(...parseArrows(activeMove.arrows));
     }
   }
 
@@ -2120,15 +2057,7 @@ const ArrowGroup = ({ arrow, orientation }: { arrow: Arrow; orientation: 'white'
   );
 };
 
-function deduplicateArrows(arrows: Arrow[]): Arrow[] {
-  const seen = new Set<string>();
-  return arrows.filter(a => {
-    const key = `${a.startSquare}-${a.endSquare}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+
 
 function getFilteredLoadedArrows(loaded: Arrow[], drawn: Arrow[]) {
   const drawnKeys = new Set(drawn.map(d => `${d.startSquare}-${d.endSquare}`));

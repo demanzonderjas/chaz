@@ -15,15 +15,26 @@ type Props = {
   onSelectMove: (uci: string) => void;
 };
 
+function fetchExplorerStats(fen: string, cb: (m: any) => void): () => void {
+  let active = true;
+  const t = setTimeout(() => {
+    fetch(`/api/explorer?fen=${encodeURIComponent(fen)}`)
+      .then((res) => (res.ok ? res.json() : { moves: [] }))
+      .then((data) => active && cb(data.moves || []))
+      .catch(() => active && cb([]));
+  }, 150);
+  return () => { active = false; clearTimeout(t); };
+}
+
 function useExplorerStats(fen: string) {
   const [stats, setStats] = useState<DbMoveStat[]>([]);
   useEffect(() => {
-    fetch(`/api/explorer?fen=${encodeURIComponent(fen)}`)
-      .then((res) => (res.ok ? res.json() : { moves: [] }))
-      .then((data) => setStats(data.moves || []));
+    if (!fen) return;
+    return fetchExplorerStats(fen, setStats);
   }, [fen]);
   return stats;
 }
+
 
 const RatioBar = ({ wins, draws, losses, total }: any) => {
   const w = (wins / total) * 100, d = (draws / total) * 100, l = (losses / total) * 100;
