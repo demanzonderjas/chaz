@@ -13,6 +13,7 @@ import { DbExplorer } from './DbExplorer';
 import { GameLibrary } from './GameLibrary';
 import { PuzzleArena } from './PuzzleArena';
 import { GamePuzzleArena } from './GamePuzzleArena';
+import { Dashboard } from './Dashboard';
 import { playMoveSound, playErrorSound } from '../services/sound';
 import { preprocessPgn, isUserBlack } from '../services/pgn';
 
@@ -82,7 +83,7 @@ export function ChessAnalysis() {
   const [cursor, setCursor] = useState(-1);
   const [initialFen, setInitialFen] = useState(STARTING_FEN);
   const [activeGame, setActiveGame] = useState<(GameMeta & { id?: number }) | null>(null);
-  const [mode, setMode] = useState<'analysis' | 'puzzles' | 'game-puzzles' | 'book-explorer'>('analysis');
+  const [mode, setMode] = useState<'analysis' | 'puzzles' | 'game-puzzles' | 'book-explorer' | 'dashboard'>('analysis');
   const [gameMistakes, setGameMistakes] = useState<any[]>([]);
   const [loadingGameMistakes, setLoadingGameMistakes] = useState(false);
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
@@ -1225,8 +1226,12 @@ export function ChessAnalysis() {
             📖 Book Lines
           </button>
           <button onClick={() => setMode('puzzles')}
-            className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
+            className={`text-xs px-3 py-1 rounded transition-colors cursor-pointer ${mode === 'puzzles' ? 'bg-blue-600 hover:bg-blue-500 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'}`}>
             🧩 Puzzles
+          </button>
+          <button onClick={() => setMode('dashboard')}
+            className={`text-xs px-3 py-1 rounded transition-colors cursor-pointer ${mode === 'dashboard' ? 'bg-blue-600 hover:bg-blue-500 text-white font-bold' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'}`}>
+            📊 Dashboard
           </button>
           <button onClick={() => setShowLibrary(true)}
             className="text-xs px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer">
@@ -1284,6 +1289,8 @@ export function ChessAnalysis() {
           playerColor={orientation}
           onExit={() => setMode('analysis')}
         />
+      ) : mode === 'dashboard' ? (
+        <Dashboard onExit={() => setMode('analysis')} />
       ) : (
         <div className="flex flex-1 overflow-hidden">
         {/* Eval bar */}
