@@ -1253,7 +1253,13 @@ export function ChessAnalysis() {
           onExit={() => setMode('analysis')}
         />
       ) : mode === 'dashboard' ? (
-        <Dashboard onExit={() => setMode('analysis')} />
+        <Dashboard
+          onExit={() => setMode('analysis')}
+          onPracticeLine={(lineId) => {
+            loadBookLineDetail(lineId);
+            setMode('book-explorer');
+          }}
+        />
       ) : (
         <div className="flex flex-1 overflow-hidden">
         {/* Eval bar */}
