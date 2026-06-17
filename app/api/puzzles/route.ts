@@ -45,9 +45,10 @@ function getDateDaysAgo(days: number): string {
   return `${yyyy}.${mm}.${dd}`;
 }
 
-function buildPuzzleSql(openingId?: number, color?: string, days?: number): { sql: string; args: any[] } {
+function buildPuzzleSql(openingId?: number, color?: string, days?: number, onlyActive = true): { sql: string; args: any[] } {
   let sql = `SELECT p.*, COALESCE(s.mistakes, 0) as mistakes, s.last_result FROM puzzles p JOIN games g ON p.game_id = g.id LEFT JOIN puzzle_stats s ON p.start_fen = s.start_fen WHERE p.type = ? AND p.solution_uci != '(none)'`;
   const args: any[] = [];
+  if (onlyActive) sql += ` AND (s.last_result IS NULL OR s.last_result = 'fail')`;
   if (openingId !== undefined) { sql += ` AND g.opening_id = ?`; args.push(openingId); }
   if (color !== undefined) { sql += ` AND g.user_color = ?`; args.push(color); }
   if (days !== undefined) { sql += ` AND g.played_date >= ?`; args.push(getDateDaysAgo(days)); }
@@ -109,14 +110,34 @@ async function filterMinorMistakes(rows: any[], type: string): Promise<any[]> {
   return list.filter(item => isDropSignificant(evalMap[item.normBefore], evalMap[item.normAfter])).map(item => item.r);
 }
 
-async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string, days?: number) {
-  const { sql, args } = buildPuzzleSql(openingId, color, days);
+async function clearPuzzleStatsByType(type: string) {
+  const sql = `DELETE FROM puzzle_stats WHERE start_fen IN (SELECT start_fen FROM puzzles WHERE type = ?)`;
+  await turso.execute({ sql, args: [type] });
+}
+
+async function clearStatsIfPuzzlesExist(type: string, openingId?: number, color?: string, days?: number) {
+  const { sql, args } = buildPuzzleSql(openingId, color, days, false);
   const rs = await turso.execute({ sql, args: [type, ...args] });
-  if (rs.rows.length === 0) return null;
-  const filtered = await filterMinorMistakes(rs.rows, type);
-  if (filtered.length === 0) return rs.rows.length > 0 ? rs.rows[0] : null; // fallback if all filtered out
-  const { items, total } = computeWeights(filtered);
-  return chooseItem(items, total, filtered[0]);
+  if (rs.rows.length > 0) await clearPuzzleStatsByType(type);
+}
+
+async function chooseFromRows(rows: any[], type: string) {
+  if (rows.length === 0) return null;
+  const filtered = await filterMinorMistakes(rows, type);
+  const pool = filtered.length > 0 ? filtered : rows;
+  const { items, total } = computeWeights(pool);
+  return chooseItem(items, total, pool[0]);
+}
+
+async function fetchRandomPuzzle(type = 'tactical', openingId?: number, color?: string, days?: number) {
+  let { sql, args } = buildPuzzleSql(openingId, color, days, true);
+  let rs = await turso.execute({ sql, args: [type, ...args] });
+  if (rs.rows.length === 0) {
+    await clearStatsIfPuzzlesExist(type, openingId, color, days);
+    ({ sql, args } = buildPuzzleSql(openingId, color, days, true));
+    rs = await turso.execute({ sql, args: [type, ...args] });
+  }
+  return chooseFromRows(rs.rows, type);
 }
 
 async function fetchPuzzleById(id: string) {
@@ -240,182 +261,80 @@ async function fetchBookLinesForFen(fenBefore: string, posPly: number) {
   return linesData;
 }
 
-async function fetchBookPuzzle(openingId?: number, color?: string, days?: number) {
-  let gamesSql = 'SELECT id, pgn, white_name, black_name, result, user_color, played_date FROM games WHERE 1=1';
+async function getLineIdsForOpening(openingId: number): Promise<number[]> {
+  const opRs = await turso.execute({ sql: 'SELECT moves_uci FROM openings WHERE id = ?', args: [openingId] });
+  if (opRs.rows.length === 0 || !opRs.rows[0].moves_uci) return [];
+  const prefix = String(opRs.rows[0].moves_uci);
+  const movesRs = await turso.execute('SELECT line_id, uci FROM book_moves WHERE ply <= 8 ORDER BY line_id, ply ASC');
+  return matchLinesToPrefix(movesRs.rows, prefix);
+}
+
+function matchLinesToPrefix(rows: any[], prefix: string): number[] {
+  const lineMoves = new Map<number, string[]>();
+  rows.forEach(m => {
+    const lid = Number(m.line_id);
+    if (!lineMoves.has(lid)) lineMoves.set(lid, []);
+    lineMoves.get(lid)!.push(String(m.uci));
+  });
+  return Array.from(lineMoves.keys()).filter(lid => lineMoves.get(lid)!.join(' ').startsWith(prefix));
+}
+
+async function fetchBookCandidates(lineIds?: number[], color?: string) {
+  let sql = 'SELECT DISTINCT fen_before, line_id FROM book_moves WHERE 1=1';
   const args: any[] = [];
-  if (openingId !== undefined) { gamesSql += ' AND opening_id = ?'; args.push(openingId); }
-  if (color !== undefined) { gamesSql += ' AND user_color = ?'; args.push(color); }
-  if (days !== undefined) { gamesSql += ' AND played_date >= ?'; args.push(getDateDaysAgo(days)); }
-  gamesSql += ' ORDER BY RANDOM() LIMIT 5';
-  
-  const gamesRs = await turso.execute({ sql: gamesSql, args });
-  if (gamesRs.rows.length === 0) return null;
+  if (lineIds?.length) { sql += ` AND line_id IN (${lineIds.map(() => '?').join(',')})`; args.push(...lineIds); }
+  if (color) sql += ` AND fen_before LIKE '% ${color} %'`;
+  const rs = await turso.execute({ sql, args });
+  return rs.rows.map(r => ({ fen: String(r.fen_before), line_id: Number(r.line_id) }));
+}
 
-  for (const game of gamesRs.rows) {
-    const pgn = String(game.pgn);
-    const black = String(game.black_name || '');
-    const uColor = (game.user_color as string) || (isUserBlack(black) ? 'b' : 'w');
+async function fetchSolvedFens(): Promise<Set<string>> {
+  const rs = await turso.execute("SELECT start_fen FROM puzzle_stats WHERE last_result = 'success'");
+  return new Set(rs.rows.map(r => normalizeBookFen(String(r.start_fen))));
+}
 
-    const chess = new Chess();
-    try {
-      chess.loadPgn(preprocessPgn(pgn).trim());
-    } catch {
-      continue;
-    }
-    const history = chess.history({ verbose: true });
-    const startFen = chess.header().FEN || chess.header().Fen || STARTING_FEN;
-    
-    const temp = new Chess(startFen);
-    const positions: { fen: string; bookFen: string; playedMove: { uci: string; san: string }; ply: number }[] = [];
-    
-    for (let idx = 0; idx < history.length; idx++) {
-      const m = history[idx];
-      const fenBefore = temp.fen();
-      const turn = temp.turn();
-      const uci = m.from + m.to + (m.promotion || '');
-      const san = m.san;
-      
-      // Skip the first three ply
-      if (idx >= 3 && turn === uColor) {
-        positions.push({
-          fen: fenBefore,
-          bookFen: normalizeBookFen(fenBefore),
-          playedMove: { uci, san },
-          ply: idx,
-        });
-      }
-      temp.move(m.san);
-    }
+async function retryBookPuzzle(openingId?: number, color?: string, days?: number, isRetry = false) {
+  if (isRetry) return null;
+  await turso.execute("DELETE FROM puzzle_stats WHERE start_fen IN (SELECT DISTINCT fen_before FROM book_moves)");
+  return fetchBookPuzzle(openingId, color, days, true);
+}
 
-    if (positions.length === 0) continue;
+function createBookPuzzleObj(sel: any, moves: any[], bmMain: any, lineName: string, bookLines: any[]) {
+  const ucis = moves.map(r => String(r.uci)), sans = moves.map(r => String(r.san));
+  return {
+    id: -sel.line_id * 1000 - Math.floor(Math.random() * 1000), type: 'book', game_id: null,
+    start_fen: sel.fen, solution_uci: String(bmMain.uci), solution_san: String(bmMain.san),
+    player_color: sel.fen.split(' ')[1] || 'w', description: 'Find the correct book move in this position!',
+    blunder_uci: null, blunder_san: null, game_title: `Book practice: ${lineName}`,
+    valid_moves: ucis, valid_moves_san: sans, game_pgn: null, book_lines: bookLines
+  };
+}
 
-    const placeholders = positions.map(() => '?').join(',');
-    const bookMovesSql = `
-      SELECT fen_before, uci, san, is_mainline, ply
-      FROM book_moves
-      WHERE fen_before IN (${placeholders})
-    `;
-    const bookMovesArgs = positions.map(p => p.bookFen);
-    const bookMovesRs = await turso.execute({ sql: bookMovesSql, args: bookMovesArgs });
-    
-    if (bookMovesRs.rows.length === 0) continue;
+async function fetchLineName(lineId: number): Promise<string> {
+  const lineRs = await turso.execute({ sql: 'SELECT name FROM book_lines WHERE id = ?', args: [lineId] });
+  return lineRs.rows[0] ? String(lineRs.rows[0].name) : 'Book Line';
+}
 
-    const bookMovesByFen: Record<string, any[]> = {};
-    bookMovesRs.rows.forEach(row => {
-      const f = String(row.fen_before);
-      if (!bookMovesByFen[f]) bookMovesByFen[f] = [];
-      bookMovesByFen[f].push(row);
-    });
+async function buildBookPuzzleFromCandidate(selected: { fen: string; line_id: number }) {
+  const moves = (await turso.execute({ sql: 'SELECT uci, san, is_mainline, ply FROM book_moves WHERE fen_before = ?', args: [selected.fen] })).rows;
+  if (moves.length === 0) return null;
+  const bmMain = moves.find(r => Number(r.is_mainline) === 1) || moves[0];
+  const lineName = await fetchLineName(selected.line_id);
+  const bLines = await fetchBookLinesForFen(selected.fen, Number(bmMain.ply));
+  const puzzle = createBookPuzzleObj(selected, moves, bmMain, lineName, bLines);
+  const [evaluation, bookLine] = await Promise.all([fetchEvaluationForFen(selected.fen), fetchBookLineForGame('', selected.fen)]);
+  return { puzzle, evaluation, bookLine };
+}
 
-    const candidates: {
-      fen: string;
-      playedUci: string;
-      playedSan: string;
-      isDeviation: boolean;
-      bookMoves: any[];
-      ply: number;
-    }[] = [];
-
-    positions.forEach(pos => {
-      const bMoves = bookMovesByFen[pos.bookFen];
-      if (!bMoves || bMoves.length === 0) return;
-
-      const playedBookMove = bMoves.some(bm => String(bm.uci) === pos.playedMove.uci);
-      candidates.push({
-        fen: pos.fen,
-        playedUci: pos.playedMove.uci,
-        playedSan: pos.playedMove.san,
-        isDeviation: !playedBookMove,
-        bookMoves: bMoves,
-        ply: pos.ply,
-      });
-    });
-
-    if (candidates.length === 0) continue;
-
-    const deviations = candidates.filter(c => c.isDeviation);
-    const pool = deviations.length > 0 ? deviations : candidates;
-
-    // Query mistake stats for candidate FENs (match by standard and normalized book FENs)
-    const fenList = pool.map(c => c.fen);
-    const normFenList = pool.map(c => normalizeBookFen(c.fen));
-    const combinedFens = Array.from(new Set([...fenList, ...normFenList]));
-    const statMap: Record<string, { mistakes: number; lastResult: string | null }> = {};
-    if (combinedFens.length > 0) {
-      const pFs = combinedFens.map(() => '?').join(',');
-      const statRs = await turso.execute({
-        sql: `SELECT start_fen, mistakes, last_result FROM puzzle_stats WHERE start_fen IN (${pFs})`,
-        args: combinedFens
-      });
-      statRs.rows.forEach(r => {
-        const normKey = normalizeBookFen(String(r.start_fen));
-        const current = statMap[normKey] || { mistakes: 0, lastResult: null };
-        const lastResultStr = r.last_result ? String(r.last_result) : null;
-        statMap[normKey] = {
-          mistakes: Math.max(current.mistakes, Number(r.mistakes || 0)),
-          lastResult: (lastResultStr === 'fail' || current.lastResult === 'fail') ? 'fail' : (lastResultStr || current.lastResult)
-        };
-      });
-    }
-
-    // Weighted random selection: favor deeper book positions and mistake positions
-    let totalWeight = 0;
-    const poolWithWeights = pool.map(c => {
-      const stats = statMap[normalizeBookFen(c.fen)] || { mistakes: 0, lastResult: null };
-      const weight = (c.ply * c.ply) * (1 + stats.mistakes * 5) * (stats.lastResult === 'success' ? 0.02 : 1);
-      totalWeight += weight;
-      return { c, weight };
-    });
-
-    let randomVal = Math.random() * totalWeight;
-    let selected = pool[0];
-    for (const item of poolWithWeights) {
-      randomVal -= item.weight;
-      if (randomVal <= 0) {
-        selected = item.c;
-        break;
-      }
-    }
-
-    const bmMain = selected.bookMoves.find(bm => bm.is_mainline === 1) || selected.bookMoves[0];
-    const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
-    
-    const description = selected.isDeviation
-      ? `You played ${selected.playedSan} in the game. Find the correct book move instead!`
-      : `Find the correct book move in this position from your game!`;
-
-    const bookLines = await fetchBookLinesForFen(selected.fen, Number(bmMain.ply));
-
-    const puzzle = {
-      id: -Number(game.id) * 1000 - Math.floor(Math.random() * 1000),
-      type: 'book',
-      game_id: game.id,
-      start_fen: selected.fen,
-      solution_uci: String(bmMain.uci),
-      solution_san: String(bmMain.san),
-      player_color: uColor,
-      description,
-      blunder_uci: selected.isDeviation ? selected.playedUci : null,
-      blunder_san: selected.isDeviation ? selected.playedSan : null,
-      game_title: gameTitle,
-      valid_moves: selected.bookMoves.map(bm => String(bm.uci)),
-      valid_moves_san: selected.bookMoves.map(bm => String(bm.san)),
-      game_pgn: pgn,
-      book_lines: bookLines,
-    };
-
-    const evalPromise = fetchEvaluationForFen(selected.fen);
-    const bookPromise = fetchBookLineForGame(Number(game.id), selected.fen);
-    const [evaluation, bookLine] = await Promise.all([evalPromise, bookPromise]);
-
-    return {
-      puzzle,
-      evaluation,
-      bookLine,
-    };
-  }
-
-  return null;
+async function fetchBookPuzzle(openingId?: number, color?: string, days?: number, isRetry = false): Promise<any> {
+  const lineIds = openingId !== undefined ? await getLineIdsForOpening(openingId) : undefined;
+  if (openingId !== undefined && lineIds?.length === 0) return null;
+  const candidates = await fetchBookCandidates(lineIds, color);
+  if (candidates.length === 0) return null;
+  const solved = await fetchSolvedFens();
+  const active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
+  if (active.length === 0) return retryBookPuzzle(openingId, color, days, isRetry);
+  return buildBookPuzzleFromCandidate(active[Math.floor(Math.random() * active.length)]);
 }
 
 function getGamePlyForFen(pgn: string, targetFen3: string): number {
@@ -555,15 +474,23 @@ async function buildWeaknessPuzzleResult(s: any) {
   };
 }
 
-async function fetchWeaknessPuzzle(openingId?: number, color?: string, days?: number) {
-  const rawMoves = await fetchRawWeakMoves(openingId, color, days);
-  if (rawMoves.length === 0) return null;
-  const fenMap = new Map(rawMoves.map(r => [String(r.fen_norm) + ' -', r]));
-  const analysisRows = await fetchCachedAnalysis(Array.from(fenMap.keys()));
-  const statsMap = await fetchPuzzleStatsForFens(analysisRows.map(r => String(r.fen_norm)));
-  const cand = buildWeaknessCandidates(analysisRows, fenMap, statsMap);
-  const selected = await filterCandidatesByPly(cand);
-  return selected ? buildWeaknessPuzzleResult(selected) : null;
+async function retryWeaknessPuzzle(openingId?: number, color?: string, days?: number, totalCount: number, isRetry = false) {
+  if (totalCount > 0 && !isRetry) {
+    await turso.execute("DELETE FROM puzzle_stats WHERE start_fen IN (SELECT DISTINCT fen_norm FROM position_moves)");
+    return fetchWeaknessPuzzle(openingId, color, days, true);
+  }
+  return null;
+}
+
+async function fetchWeaknessPuzzle(openingId?: number, color?: string, days?: number, isRetry = false): Promise<any> {
+  const raw = await fetchRawWeakMoves(openingId, color, days);
+  if (raw.length === 0) return null;
+  const analysis = await fetchCachedAnalysis(raw.map(r => String(r.fen_norm) + ' -'));
+  const cand = buildWeaknessCandidates(analysis, new Map(raw.map(r => [String(r.fen_norm) + ' -', r])), await fetchPuzzleStatsForFens(analysis.map(r => String(r.fen_norm))));
+  const active = cand.filter(c => c.lastResult !== 'success');
+  if (active.length === 0) return retryWeaknessPuzzle(openingId, color, days, cand.length, isRetry);
+  const sel = await filterCandidatesByPly(active);
+  return sel ? buildWeaknessPuzzleResult(sel) : null;
 }
 
 export async function GET(req: NextRequest) {
