@@ -19,7 +19,7 @@ function normalizeFen(fen: string): string {
 
 function normalizeBookFen(fen: string): string {
   const p = fen.split(' ');
-  return `${p[0]} ${p[1]} ${p[2]} -`;
+  return `${p[0]} ${p[1]} ${p[2]} ${p[3]}`;
 }
 
 function getWinProbability(cp: number): number {

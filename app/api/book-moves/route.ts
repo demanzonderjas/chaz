@@ -18,7 +18,7 @@ const BOOK_MOVES_QUERY = `
 
 function normalizeFen(fen: string): string {
   const parts = fen.split(' ');
-  return `${parts[0]} ${parts[1]} ${parts[2]} -`;
+  return `${parts[0]} ${parts[1]} ${parts[2]} ${parts[3]}`;
 }
 
 function mapRowToMove(r: any) {

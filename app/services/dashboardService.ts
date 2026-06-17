@@ -257,7 +257,7 @@ function filterDistinctWorstLines(rows: any[], movesMap: Map<number, string[]>) 
 
 export async function fetchWorstBookLines(days?: number) {
   const filter = days ? `AND g.played_date >= '${getDaysAgoDate(days)}'` : '';
-  const q = `SELECT bl.id as id, bl.name, bl.color, COUNT(DISTINCT CASE WHEN pm.losses > 0 THEN pm.game_id END) as losses, COUNT(DISTINCT pm.game_id) as played FROM book_lines bl JOIN book_moves bm ON bl.id = bm.line_id JOIN position_moves pm ON (pm.fen_norm || ' -') = bm.fen_before JOIN games g ON pm.game_id = g.id WHERE g.result IS NOT NULL ${filter} GROUP BY bl.id HAVING losses > 0 ORDER BY losses DESC, played DESC LIMIT 1000`;
+  const q = `SELECT bl.id as id, bl.name, bl.color, COUNT(DISTINCT CASE WHEN pm.losses > 0 THEN pm.game_id END) as losses, COUNT(DISTINCT pm.game_id) as played FROM book_lines bl JOIN book_moves bm ON bl.id = bm.line_id JOIN position_moves pm ON pm.fen_norm = SUBSTR(bm.fen_before, 1, LENGTH(bm.fen_before) - CASE WHEN SUBSTR(bm.fen_before, -2, 1) = ' ' THEN 2 ELSE 3 END) JOIN games g ON pm.game_id = g.id WHERE g.result IS NOT NULL ${filter} GROUP BY bl.id HAVING losses > 0 ORDER BY losses DESC, played DESC LIMIT 1000`;
   const rs = await turso.execute(q);
   if (rs.rows.length === 0) return [];
   const movesMap = await fetchMovesMap(rs.rows.map(r => Number(r.id)));

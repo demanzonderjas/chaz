@@ -6,7 +6,7 @@ type PositionInput = { fen: string; san: string };
 
 function normalizeFen(fen: string): string {
   const p = fen.split(' ');
-  return `${p[0]} ${p[1]} ${p[2]} -`;
+  return `${p[0]} ${p[1]} ${p[2]} ${p[3]}`;
 }
 
 function getUciFromFenSan(fen: string, san: string): string {

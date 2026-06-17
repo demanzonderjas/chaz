@@ -3,7 +3,7 @@ import { turso } from '../../services/turso';
 
 function normalizeBookFen(fen: string): string {
   const p = fen.split(' ');
-  return `${p[0]} ${p[1]} ${p[2]} -`;
+  return `${p[0]} ${p[1]} ${p[2]} ${p[3]}`;
 }
 
 export async function GET(req: NextRequest) {

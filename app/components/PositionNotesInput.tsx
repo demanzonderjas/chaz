@@ -33,11 +33,19 @@ export function PositionNotesInput({ note, placeholder, onSave, onClearArrows, h
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      handleSave();
+    }
+  };
+
   return (
     <div className="space-y-2">
       <textarea
         value={val}
         onChange={e => setVal(e.target.value)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
         className={`w-full ${heightClass} bg-zinc-900 border border-zinc-800 rounded p-1.5 text-xs font-sans resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-200`}
       />
