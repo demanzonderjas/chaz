@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo, memo } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard, ChessboardProvider } from 'react-chessboard';
 import { useStockfish } from '../hooks/useStockfish';
@@ -20,6 +20,45 @@ import { preprocessPgn, isUserBlack } from '../services/pgn';
 
 
 type Arrow = { id?: string; startSquare: string; endSquare: string; color: string };
+
+type BoardProps = {
+  boardKey: number;
+  position: string;
+  orientation: 'white' | 'black';
+  arrows: Arrow[];
+  allowDrawingArrows: boolean;
+  onPieceDrop: any;
+  squareRenderer: any;
+  onArrowsChange: (change: { arrows: any[] }) => void;
+};
+
+const boardOptions = (pos: string, ort: any, arr: any, draw: boolean, drop: any, render: any, change: any) => ({
+  position: pos, boardOrientation: ort, arrows: arr, allowDrawingArrows: draw,
+  animationDurationInMs: 150, darkSquareStyle: { backgroundColor: '#b58863' },
+  lightSquareStyle: { backgroundColor: '#f0d9b5' }, onPieceDrop: drop,
+  squareRenderer: render, onArrowsChange: change
+});
+
+const MemoizedBoard = memo(({ boardKey, position, orientation, arrows, allowDrawingArrows, onPieceDrop, squareRenderer, onArrowsChange }: BoardProps) => {
+  const opts = boardOptions(position, orientation, arrows, allowDrawingArrows, onPieceDrop, squareRenderer, onArrowsChange);
+  return <ChessboardProvider key={boardKey} options={opts}><Chessboard /></ChessboardProvider>;
+});
+
+const mapDrawnArrow = (a: any, index: number) => {
+  const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
+  const endSquare = a.endSquare || (Array.isArray(a) ? a[1] : '');
+  return { id: `drawn-${startSquare}-${endSquare}-${index}`, startSquare, endSquare, color: 'rgba(168,85,247,0.85)' };
+};
+
+const canSaveArrows = (mode: string, quizMode: string, idx: number) => {
+  if (mode === 'analysis') return true;
+  return mode === 'book-explorer' && quizMode === 'study' && idx >= 0;
+};
+
+const saveArrowsData = (mode: string, newArrows: Arrow[], saveBook: any, saveAnalysis: any) => {
+  if (mode === 'book-explorer') saveBook(newArrows);
+  else if (mode === 'analysis') saveAnalysis(newArrows);
+};
 
 function deduplicateArrows(arrows: Arrow[]): Arrow[] {
   const seen = new Set<string>();
@@ -65,14 +104,14 @@ function applyPosition(comment: string, arrows: string, s: PositionSetters) {
 }
 
 function fetchBookLine(fen: string, cb: (d: any) => void): () => void {
-  let active = true;
+  const controller = new AbortController();
   const t = setTimeout(() => {
-    fetch(`/api/book-lines?positionFen=${encodeURIComponent(fen)}`)
+    fetch(`/api/book-lines?positionFen=${encodeURIComponent(fen)}`, { signal: controller.signal })
       .then(r => r.ok ? r.json() : null)
-      .then(d => active && cb(d))
-      .catch(() => active && cb(null));
-  }, 150);
-  return () => { active = false; clearTimeout(t); };
+      .then(d => cb(d))
+      .catch(err => err.name !== 'AbortError' && cb(null));
+  }, 200);
+  return () => { clearTimeout(t); controller.abort(); };
 }
 
 
@@ -415,6 +454,21 @@ export function ChessAnalysis() {
       console.error('Error auto-saving arrows:', err);
     }
   };
+
+  const handleArrowsChange = useCallback(({ arrows }: { arrows: any[] }) => {
+    if (!canSaveArrows(mode, quizMode, activeBookMoveIdx)) return;
+    const newArrows = arrows.map((a, i) => mapDrawnArrow(a, i));
+    if (!areArrowsEqual(newArrows, drawnArrows)) {
+      setDrawnArrows(newArrows);
+      saveArrowsData(mode, newArrows, autoSaveArrows, autoSaveAnalysisArrows);
+    }
+  }, [mode, quizMode, activeBookMoveIdx, drawnArrows, autoSaveArrows, autoSaveAnalysisArrows]);
+
+  const boardArrows = useMemo(() => (
+    mode === 'book-explorer'
+      ? (quizMode === 'study' ? getFilteredLoadedArrows(loadedArrows, drawnArrows) : [])
+      : (mode === 'analysis' ? getFilteredLoadedArrows(loadedArrows, drawnArrows) : [])
+  ), [mode, quizMode, loadedArrows, drawnArrows]);
 
   const getCombinedArrows = () => deduplicateArrows([...loadedArrows, ...drawnArrows]);
 
@@ -1270,49 +1324,16 @@ export function ChessAnalysis() {
         {/* Board */}
         <div className="flex flex-col items-center justify-center flex-1 p-2 gap-4">
           <div className="relative aspect-square" style={{ width: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>
-            <ChessboardProvider
-              key={boardKey}
-              options={{
-                position: tempWrongFen || boardFen,
-                boardOrientation: orientation,
-                arrows: mode === 'book-explorer'
-                  ? (quizMode === 'study' ? getFilteredLoadedArrows(loadedArrows, drawnArrows) : [])
-                  : (mode === 'analysis' ? getFilteredLoadedArrows(loadedArrows, drawnArrows) : []),
-                allowDrawingArrows: mode === 'analysis' || quizMode === 'study',
-                animationDurationInMs: 150,
-                darkSquareStyle: { backgroundColor: '#b58863' },
-                lightSquareStyle: { backgroundColor: '#f0d9b5' },
-                onPieceDrop,
-                squareRenderer,
-                onArrowsChange: ({ arrows }) => {
-                  if (mode !== 'book-explorer' && mode !== 'analysis') return;
-                  if (mode === 'book-explorer') {
-                    if (quizMode !== 'study') return;
-                    if (activeBookMoveIdx < 0) return;
-                  }
-                  const newArrows = arrows.map((a: any, index: number) => {
-                    const startSquare = a.startSquare || (Array.isArray(a) ? a[0] : '');
-                    const endSquare = a.endSquare || (Array.isArray(a) ? a[1] : '');
-                    return {
-                      id: `drawn-${startSquare}-${endSquare}-${index}`,
-                      startSquare,
-                      endSquare,
-                      color: 'rgba(168,85,247,0.85)' // Violet styling
-                    };
-                  });
-                  if (!areArrowsEqual(newArrows, drawnArrows)) {
-                    setDrawnArrows(newArrows);
-                    if (mode === 'book-explorer') {
-                      autoSaveArrows(newArrows);
-                    } else if (mode === 'analysis') {
-                      autoSaveAnalysisArrows(newArrows);
-                    }
-                  }
-                }
-              }}
-            >
-              <Chessboard />
-            </ChessboardProvider>
+            <MemoizedBoard
+              boardKey={boardKey}
+              position={tempWrongFen || boardFen}
+              orientation={orientation}
+              arrows={boardArrows}
+              allowDrawingArrows={mode === 'analysis' || quizMode === 'study'}
+              onPieceDrop={onPieceDrop}
+              squareRenderer={squareRenderer}
+              onArrowsChange={handleArrowsChange}
+            />
             <CustomBoardArrows arrows={mode === 'book-explorer' && quizMode !== 'study' ? [] : arrows} orientation={orientation} />
           </div>
           <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>

@@ -10,14 +10,14 @@ export type BookMove = {
 };
 
 function fetchBookMoves(fen: string, cb: (m: any) => void): () => void {
-  let active = true;
+  const controller = new AbortController();
   const t = setTimeout(() => {
-    fetch(`/api/book-moves?fen=${encodeURIComponent(fen)}`)
+    fetch(`/api/book-moves?fen=${encodeURIComponent(fen)}`, { signal: controller.signal })
       .then(r => r.json())
-      .then(d => active && cb(d.moves ?? []))
-      .catch(() => active && cb([]));
-  }, 150);
-  return () => { active = false; clearTimeout(t); };
+      .then(d => cb(d.moves ?? []))
+      .catch(err => err.name !== 'AbortError' && cb([]));
+  }, 200);
+  return () => { clearTimeout(t); controller.abort(); };
 }
 
 export function useBookMoves(fen: string) {

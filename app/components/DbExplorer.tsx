@@ -16,14 +16,14 @@ type Props = {
 };
 
 function fetchExplorerStats(fen: string, cb: (m: any) => void): () => void {
-  let active = true;
+  const controller = new AbortController();
   const t = setTimeout(() => {
-    fetch(`/api/explorer?fen=${encodeURIComponent(fen)}`)
+    fetch(`/api/explorer?fen=${encodeURIComponent(fen)}`, { signal: controller.signal })
       .then((res) => (res.ok ? res.json() : { moves: [] }))
-      .then((data) => active && cb(data.moves || []))
-      .catch(() => active && cb([]));
-  }, 150);
-  return () => { active = false; clearTimeout(t); };
+      .then((data) => cb(data.moves || []))
+      .catch((err) => err.name !== 'AbortError' && cb([]));
+  }, 200);
+  return () => { clearTimeout(t); controller.abort(); };
 }
 
 function useExplorerStats(fen: string) {
