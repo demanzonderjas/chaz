@@ -206,6 +206,11 @@ class StockfishScheduler {
     this.runNext();
   }
 
+  public stopLiveEval() {
+    this.stopCurrentSearch();
+    this.runNext();
+  }
+
   private stopCurrentSearch() {
     this.liveTask = null;
     this.lastLiveResult = null;

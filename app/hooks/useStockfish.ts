@@ -32,5 +32,6 @@ export function useStockfish() {
   const analyse = useCallback((fen: string, color: 'w' | 'b', depth = 22) => {
     stockfishScheduler.startLiveEval({ fen, color, depth, onInfo: setEvaluation });
   }, [setEvaluation]);
-  return { ready, evaluation, analyse };
+  const stopLive = useCallback(() => stockfishScheduler.stopLiveEval(), []);
+  return { ready, evaluation, analyse, stopLive };
 }

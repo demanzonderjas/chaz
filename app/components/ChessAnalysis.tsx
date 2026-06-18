@@ -268,7 +268,7 @@ export function ChessAnalysis() {
     return false;
   }, [quizMode, solvedMoveIdx, reviewQueue, currentReviewIdx]);
 
-  const { ready, evaluation, analyse } = useStockfish();
+  const { ready, evaluation, analyse, stopLive } = useStockfish();
   const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
 
   const currentFen = (cursor < 0 || !history[cursor]) ? initialFen : history[cursor].fen;
@@ -320,11 +320,12 @@ export function ChessAnalysis() {
 
   useEffect(() => {
     if (!ready || analyzing) return;
+    stopLive();
     const timer = setTimeout(() => {
       analyse(boardFen, boardColor, 16);
     }, 200);
     return () => clearTimeout(timer);
-  }, [ready, boardFen, boardColor, analyse, analyzing]);
+  }, [ready, boardFen, boardColor, analyse, stopLive, analyzing]);
 
 
   // Keyboard navigation
