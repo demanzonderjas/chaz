@@ -528,6 +528,18 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         setBoardFen(data.puzzle.start_fen);
         setStatus('playing');
         setActiveLineIdx(0);
+        
+        // Initialize sequenceMoveIdx for book puzzles
+        const lines = data.puzzle?.book_lines || [];
+        if (data.puzzle?.type === 'book' && lines.length > 0) {
+          const startIdx = lines[0].moves.findIndex(
+            (m: any) => normalizeBookFen(m.fen_before) === normalizeBookFen(data.puzzle.start_fen)
+          );
+          setSequenceMoveIdx(startIdx !== -1 ? startIdx : 0);
+        } else {
+          setSequenceMoveIdx(-1);
+        }
+
         setHint(null);
         setHasMadeMistake(false);
         setAttemptReported(false);
@@ -542,6 +554,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   }, [puzzleType, fetchKey, selectedOpening, selectedRecency]);
 
   const [activeLineIdx, setActiveLineIdx] = useState<number>(0);
+  const [sequenceMoveIdx, setSequenceMoveIdx] = useState<number>(-1);
   
   const activeLine = puzzle?.book_lines?.[activeLineIdx];
   const activeMoveIdx = (() => {
@@ -620,18 +633,68 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     return () => window.removeEventListener('keydown', onKey);
   }, [status, puzzleType, puzzle, evaluation, boardFen, setBoardFen]);
 
+  // Opponent Auto-play logic (Computer moves in sequence)
+  useEffect(() => {
+    if (puzzleType !== 'book' || !puzzle || !activeLine || status !== 'playing') return;
+
+    if (sequenceMoveIdx >= activeLine.moves.length) {
+      // Sequence completed!
+      setStatus('correct');
+      reportAttempt(!hasMadeMistake);
+      return;
+    }
+
+    if (sequenceMoveIdx < 0) return;
+
+    const currentMove = activeLine.moves[sequenceMoveIdx];
+    const isPlayerWhite = activeLine.color === 'w';
+    const isCurrentMoveWhite = currentMove.ply % 2 === 1;
+    const isComputerTurn = (isPlayerWhite && !isCurrentMoveWhite) || (!isPlayerWhite && isCurrentMoveWhite);
+
+    if (isComputerTurn) {
+      const timer = setTimeout(() => {
+        setBoardFen(currentMove.fen_after);
+        setSequenceMoveIdx(prev => prev + 1);
+        playMoveSound(currentMove.san.includes('x'));
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [puzzleType, puzzle, activeLine, sequenceMoveIdx, status, reportAttempt, hasMadeMistake]);
+
   const bestLineMoves = getBestLineMoves(puzzle, evaluation);
 
   const handleTypeChange = (type: PuzzleType) => {
     setPuzzleType(type);
     setPuzzle(null); setEvaluation(null); setBlunderEvaluation(null); setBookLine(null);
-    setBoardFen(STARTING_FEN); setActiveLineIdx(0);
+    setBoardFen(STARTING_FEN); setActiveLineIdx(0); setSequenceMoveIdx(-1);
     setHint(null); setHasMadeMistake(false); setAttemptReported(false);
   };
 
   const onReveal = useCallback(() => {
     if (!puzzle) return;
     reportAttempt(false);
+    
+    if (puzzleType === 'book') {
+      const activeLine = puzzle.book_lines?.[activeLineIdx];
+      if (activeLine && sequenceMoveIdx !== -1) {
+        const currentCorrectMove = activeLine.moves[sequenceMoveIdx];
+        if (currentCorrectMove) {
+          const chess = new Chess(boardFen);
+          try {
+            const m = chess.move({ 
+              from: currentCorrectMove.uci.slice(0, 2), 
+              to: currentCorrectMove.uci.slice(2, 4), 
+              promotion: currentCorrectMove.uci[4] 
+            });
+            playMoveSound(m ? m.san.includes('x') : false);
+          } catch {}
+          setBoardFen(chess.fen());
+        }
+      }
+      setStatus('solved');
+      return;
+    }
+
     const chess = new Chess(boardFen);
     try {
       const m = chess.move({ from: puzzle.solution_uci.slice(0, 2), to: puzzle.solution_uci.slice(2, 4), promotion: puzzle.solution_uci[4] });
@@ -640,13 +703,51 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     } catch {}
     setBoardFen(chess.fen());
     setStatus('solved');
-  }, [puzzle, boardFen, reportAttempt]);
+  }, [puzzle, boardFen, reportAttempt, puzzleType, activeLineIdx, sequenceMoveIdx]);
 
   const onPieceDrop = useCallback(({ sourceSquare, targetSquare, piece }: any) => {
     if (!puzzle || status !== 'playing') return false;
     const promo = getPromoPiece(piece.pieceType, targetSquare);
     if (!isLegalMove(boardFen, sourceSquare, targetSquare, promo)) return false;
     const uci = sourceSquare + targetSquare + (promo || '');
+
+    if (puzzleType === 'book') {
+      const activeLine = puzzle.book_lines?.[activeLineIdx];
+      if (!activeLine || sequenceMoveIdx === -1) return false;
+      const currentCorrectMove = activeLine.moves[sequenceMoveIdx];
+      if (!currentCorrectMove) return false;
+
+      if (uci === currentCorrectMove.uci) {
+        const chess = new Chess(boardFen);
+        try {
+          const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
+          const isCapture = m ? m.san.includes('x') : false;
+          playMoveSound(isCapture);
+        } catch {}
+        
+        setBoardFen(currentCorrectMove.fen_after);
+        setSequenceMoveIdx(prev => prev + 1);
+
+        const isLastMove = sequenceMoveIdx + 1 >= activeLine.moves.length;
+        if (!isLastMove) {
+          setHint("Correct! Keep playing the sequence...");
+          setTimeout(() => {
+            setHint(null);
+          }, 1500);
+        }
+        return true;
+      } else {
+        playErrorSound();
+        setHasMadeMistake(true);
+        setStatus('incorrect');
+        setTimeout(() => {
+          setBoardFen(currentCorrectMove.fen_before);
+          setStatus('playing');
+        }, 1000);
+        return true;
+      }
+    }
+
     const ok = isAcceptableMove(uci, puzzle, evaluation);
     if (ok) {
       setHint(null);
@@ -675,7 +776,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       handleWrongMove(puzzle, setBoardFen, setStatus);
     }
     return ok;
-  }, [puzzle, boardFen, status, evaluation, puzzleType, hasMadeMistake, reportAttempt]);
+  }, [puzzle, boardFen, status, evaluation, puzzleType, hasMadeMistake, reportAttempt, activeLineIdx, sequenceMoveIdx]);
 
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
