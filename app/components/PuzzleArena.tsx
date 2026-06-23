@@ -257,17 +257,21 @@ const StatusCard = ({
   status, 
   solution, 
   puzzleType, 
-  hint 
+  hint,
+  isSequence
 }: { 
   status: string; 
   solution: string; 
   puzzleType: string; 
   hint: string | null;
+  isSequence?: boolean;
 }) => {
   if (status === 'correct') {
     return (
       <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">
-        {puzzleType === 'book' ? '✨ CORRECT! You found the book move.' : '✨ CORRECT! You found the best move.'}
+        {puzzleType === 'book' 
+          ? (isSequence ? '✨ CORRECT! You completed the book sequence.' : '✨ CORRECT! You found the book move.')
+          : '✨ CORRECT! You found the best move.'}
       </div>
     );
   }
@@ -890,7 +894,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                 bookLine={bookLine} 
                 onLoadGame={onLoadGame && puzzle.game_pgn ? () => onLoadGame(puzzle.game_pgn, puzzle.start_fen, puzzle.game_id) : undefined}
               />
-              <StatusCard status={status} solution={puzzle.solution_san} puzzleType={puzzleType} hint={hint} />
+              <StatusCard status={status} solution={puzzle.solution_san} puzzleType={puzzleType} hint={hint} isSequence={puzzle.is_sequence} />
               {status === 'playing' && hint && (
                 <div className="mt-2 text-xs text-rose-300 bg-rose-950/20 border border-rose-900/40 rounded p-2.5 text-center leading-relaxed">
                   💡 Hint: {hint}
