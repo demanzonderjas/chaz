@@ -399,12 +399,92 @@ async function buildBookPuzzleFromCandidate(selected: { fen: string; line_id: nu
 async function fetchBookPuzzle(openingId?: number, color?: string, days?: number, isRetry = false): Promise<any> {
   const lineIds = openingId !== undefined ? await getLineIdsForOpening(openingId) : undefined;
   if (openingId !== undefined && lineIds?.length === 0) return null;
-  const candidates = await fetchBookCandidates(lineIds, color);
-  if (candidates.length === 0) return null;
+
+  // Determine target color to ensure even white/black distribution if no color is specified
+  let targetColor = color;
+  if (!targetColor) {
+    targetColor = Math.random() < 0.5 ? 'w' : 'b';
+  }
+
+  // Fetch candidates for targetColor
+  let candidates = await fetchBookCandidates(lineIds, targetColor);
   const solved = await fetchSolvedFens();
-  const active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
-  if (active.length === 0) return retryBookPuzzle(openingId, color, days, isRetry);
-  return buildBookPuzzleFromCandidate(active[Math.floor(Math.random() * active.length)]);
+  let active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
+
+  // Fallback to the other color if no active candidates exist for targetColor and no color was specified
+  if (active.length === 0 && !color) {
+    const fallbackColor = targetColor === 'w' ? 'b' : 'w';
+    candidates = await fetchBookCandidates(lineIds, fallbackColor);
+    active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
+  }
+
+  if (active.length === 0) {
+    return retryBookPuzzle(openingId, color, days, isRetry);
+  }
+
+  // Sample up to 200 candidates to lookup play count in position_moves
+  const sampleSize = Math.min(200, active.length);
+  const samples: typeof active = [];
+  const sampleIndices = new Set<number>();
+  while (samples.length < sampleSize) {
+    const idx = Math.floor(Math.random() * active.length);
+    if (!sampleIndices.has(idx)) {
+      sampleIndices.add(idx);
+      samples.push(active[idx]);
+    }
+  }
+
+  // Group by normalized 3-part FEN (piece placement, active color, castling rights)
+  const normFenToSamples = new Map<string, typeof active>();
+  samples.forEach(s => {
+    const parts = s.fen.split(' ');
+    const norm = `${parts[0]} ${parts[1]} ${parts[2]}`;
+    if (!normFenToSamples.has(norm)) {
+      normFenToSamples.set(norm, []);
+    }
+    normFenToSamples.get(norm)!.push(s);
+  });
+
+  const uniqueNormFens = Array.from(normFenToSamples.keys());
+  const playCountsMap = new Map<string, number>();
+
+  if (uniqueNormFens.length > 0) {
+    const placeholders = uniqueNormFens.map(() => '?').join(',');
+    const querySql = `
+      SELECT fen_norm, SUM(wins + draws + losses) as play_count
+      FROM position_moves
+      WHERE fen_norm IN (${placeholders})
+      GROUP BY fen_norm
+    `;
+    const rs = await turso.execute({ sql: querySql, args: uniqueNormFens });
+    rs.rows.forEach(r => {
+      playCountsMap.set(String(r.fen_norm), Number(r.play_count));
+    });
+  }
+
+  // Calculate weights using smooth logarithmic scale: weight = 1 + log2(1 + count) * 5
+  let totalWeight = 0;
+  const weightedSamples = samples.map(s => {
+    const parts = s.fen.split(' ');
+    const norm = `${parts[0]} ${parts[1]} ${parts[2]}`;
+    const count = playCountsMap.get(norm) || 0;
+    const weight = 1 + Math.log2(1 + count) * 5;
+    totalWeight += weight;
+    return { candidate: s, weight };
+  });
+
+  // Weighted random selection
+  let r = Math.random() * totalWeight;
+  let selected = weightedSamples[weightedSamples.length - 1].candidate;
+  for (const item of weightedSamples) {
+    r -= item.weight;
+    if (r <= 0) {
+      selected = item.candidate;
+      break;
+    }
+  }
+
+  return buildBookPuzzleFromCandidate(selected);
 }
 
 function getGamePlyForFen(pgn: string, targetFen3: string): number {

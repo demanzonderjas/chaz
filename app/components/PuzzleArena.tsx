@@ -651,7 +651,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     if (sequenceMoveIdx < 0) return;
 
     const currentMove = activeLine.moves[sequenceMoveIdx];
-    const isPlayerWhite = activeLine.color === 'w';
+    const isPlayerWhite = puzzle.player_color === 'w';
     const isCurrentMoveWhite = currentMove.ply % 2 === 1;
     const isComputerTurn = (isPlayerWhite && !isCurrentMoveWhite) || (!isPlayerWhite && isCurrentMoveWhite);
 
