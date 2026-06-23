@@ -284,7 +284,11 @@ async function fetchBookLinesForFenWithLimit(fenBefore: string, candidateLineId:
     const sIdx = lineMoves.findIndex(m => normalizeBookFen(m.fen_before) === bookFen);
     if (sIdx !== -1) {
       if (isSequence) {
-        lineMoves = lineMoves.slice(0, sIdx + 10);
+        let N = Math.min(lineMoves.length - sIdx, 9);
+        if (N % 2 === 0) {
+          N = N - 1;
+        }
+        lineMoves = lineMoves.slice(0, sIdx + N);
       } else {
         lineMoves = lineMoves.slice(0, sIdx + 1);
       }

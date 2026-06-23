@@ -677,6 +677,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const onReveal = useCallback(() => {
     if (!puzzle) return;
     reportAttempt(false);
+    setHasMadeMistake(true);
     
     if (puzzleType === 'book') {
       const activeLine = puzzle.book_lines?.[activeLineIdx];
@@ -693,6 +694,17 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
             playMoveSound(m ? m.san.includes('x') : false);
           } catch {}
           setBoardFen(chess.fen());
+
+          const isLastMove = sequenceMoveIdx + 1 >= activeLine.moves.length;
+          if (puzzle.is_sequence && !isLastMove) {
+            setSequenceMoveIdx(prev => prev + 1);
+            setHint(`Revealed: ${currentCorrectMove.san}. Keep playing the sequence...`);
+            setTimeout(() => {
+              setHint(null);
+            }, 2000);
+            setStatus('playing');
+            return;
+          }
         }
       }
       setStatus('solved');
