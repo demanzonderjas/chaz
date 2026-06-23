@@ -474,8 +474,8 @@ async function buildWeaknessPuzzleResult(s: any) {
   };
 }
 
-async function retryWeaknessPuzzle(openingId?: number, color?: string, days?: number, totalCount: number, isRetry = false) {
-  if (totalCount > 0 && !isRetry) {
+async function retryWeaknessPuzzle(openingId?: number, color?: string, days?: number, totalCount?: number, isRetry = false) {
+  if (totalCount !== undefined && totalCount > 0 && !isRetry) {
     await turso.execute("DELETE FROM puzzle_stats WHERE start_fen IN (SELECT DISTINCT fen_norm FROM position_moves)");
     return fetchWeaknessPuzzle(openingId, color, days, true);
   }

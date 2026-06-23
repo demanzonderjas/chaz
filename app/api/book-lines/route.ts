@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Chess } from 'chess.js';
 import { turso } from '../../services/turso';
 
 function normalizeBookFen(fen: string): string {
@@ -198,7 +199,61 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { lineId, ply, comment, arrows, fen } = await req.json();
+    const body = await req.json();
+    const { action } = body;
+
+    if (action === 'create') {
+      const { name, color, initialFen, moves } = body;
+      if (!name || !color || !moves || !Array.isArray(moves)) {
+        return NextResponse.json({ error: 'Missing name, color, or moves' }, { status: 400 });
+      }
+
+      const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+      const chess = new Chess(initialFen || STARTING_FEN);
+      const movesToInsert = [];
+      for (let i = 0; i < moves.length; i++) {
+        const san = moves[i];
+        const fenBefore = normalizeBookFen(chess.fen());
+        let moveObj;
+        try {
+          moveObj = chess.move(san);
+        } catch (e) {
+          return NextResponse.json({ error: `Invalid move at ply ${i + 1}: ${san}` }, { status: 400 });
+        }
+        const fenAfter = normalizeBookFen(chess.fen());
+        const uci = moveObj.from + moveObj.to + (moveObj.promotion || '');
+        movesToInsert.push({
+          ply: i + 1,
+          fen_before: fenBefore,
+          fen_after: fenAfter,
+          san,
+          uci
+        });
+      }
+
+      const tx = await turso.transaction("write");
+      try {
+        const lineInsert = await tx.execute({
+          sql: 'INSERT INTO book_lines (name, color, created_at) VALUES (?, ?, datetime(\'now\'))',
+          args: [name.trim(), color]
+        });
+        const lineId = Number(lineInsert.lastInsertRowid);
+
+        for (const m of movesToInsert) {
+          await tx.execute({
+            sql: 'INSERT INTO book_moves (line_id, ply, fen_before, fen_after, san, uci, is_mainline) VALUES (?, ?, ?, ?, ?, ?, 1)',
+            args: [lineId, m.ply, m.fen_before, m.fen_after, m.san, m.uci]
+          });
+        }
+        await tx.commit();
+        return NextResponse.json({ success: true, lineId });
+      } catch (dbErr) {
+        await tx.rollback();
+        return NextResponse.json({ error: `Database transaction failed: ${String(dbErr)}` }, { status: 500 });
+      }
+    }
+
+    const { lineId, ply, comment, arrows, fen } = body;
 
     if (fen) {
       const normFen = normalizeBookFen(fen);

@@ -208,6 +208,13 @@ export function ChessAnalysis() {
   const [expandedOpenings, setExpandedOpenings] = useState<Record<number | string, boolean>>({});
   const [loadingDetailId, setLoadingDetailId] = useState<number | null>(null);
 
+  // Add Book Line Modal states
+  const [showAddBookLineModal, setShowAddBookLineModal] = useState<boolean>(false);
+  const [newBookLineName, setNewBookLineName] = useState<string>('');
+  const [newBookLineColor, setNewBookLineColor] = useState<'w' | 'b'>('w');
+  const [isAddingBookLine, setIsAddingBookLine] = useState<boolean>(false);
+  const [addBookLineError, setAddBookLineError] = useState<string | null>(null);
+
   // Quiz Mode states
   const [quizMode, setQuizMode] = useState<'study' | 'quiz' | 'review'>('quiz');
   const [solvedMoveIdx, setSolvedMoveIdx] = useState<number>(-1);
@@ -368,21 +375,29 @@ export function ChessAnalysis() {
     return () => window.removeEventListener('keydown', onKey);
   }, [explorerLine, explorerMoveIdx]);
 
+  const fetchBookLines = useCallback(async () => {
+    setLoadingBookLines(true);
+    try {
+      const res = await fetch('/api/book-lines');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.openings) {
+          setGroupedOpenings(data.openings);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching book lines:', err);
+    } finally {
+      setLoadingBookLines(false);
+    }
+  }, []);
+
   // Book explorer side-effects and helper functions
   useEffect(() => {
     if (mode === 'book-explorer' && groupedOpenings.length === 0) {
-      setLoadingBookLines(true);
-      fetch('/api/book-lines')
-        .then(res => res.json())
-        .then(data => {
-          if (data.openings) {
-            setGroupedOpenings(data.openings);
-          }
-        })
-        .catch(err => console.error('Error fetching book lines:', err))
-        .finally(() => setLoadingBookLines(false));
+      fetchBookLines();
     }
-  }, [mode, groupedOpenings.length]);
+  }, [mode, groupedOpenings.length, fetchBookLines]);
 
   useEffect(() => {
     const activeMove = activeBookLine && activeBookMoveIdx >= 0 ? activeBookLine.moves[activeBookMoveIdx] : null;
@@ -651,6 +666,48 @@ export function ChessAnalysis() {
       setGroupedOpenings(data.openings || []);
       setIsTempSubgroupActive(false);
       setQuizStartFen(null);
+    }
+  };
+
+  const openAddBookLineModal = () => {
+    setNewBookLineName('');
+    setNewBookLineColor(orientation === 'black' ? 'b' : 'w');
+    setAddBookLineError(null);
+    setIsAddingBookLine(false);
+    setShowAddBookLineModal(true);
+  };
+
+  const handleAddBookLine = async () => {
+    if (!newBookLineName.trim()) return;
+    setIsAddingBookLine(true);
+    setAddBookLineError(null);
+    try {
+      const moves = history.slice(0, cursor + 1).map(h => h.san);
+      const res = await fetch('/api/book-lines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          name: newBookLineName,
+          color: newBookLineColor,
+          initialFen: initialFen,
+          moves
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await restoreAllOpenings();
+        await loadBookLineDetail(data.lineId);
+        setMode('book-explorer');
+        setShowAddBookLineModal(false);
+      } else {
+        setAddBookLineError(data.error || 'Failed to save book line.');
+      }
+    } catch (err) {
+      setAddBookLineError('An unexpected error occurred.');
+      console.error(err);
+    } finally {
+      setIsAddingBookLine(false);
     }
   };
 
@@ -1967,6 +2024,24 @@ export function ChessAnalysis() {
                 </div>
               )}
 
+              {/* Custom Book Line addition */}
+              {cursor >= 0 && (
+                <div className="px-3 py-3 border-b border-zinc-800 shrink-0 bg-zinc-900/10 flex items-center justify-between gap-3 font-sans">
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Custom Book Line</span>
+                    <span className="text-xs text-zinc-400 truncate">
+                      Save variation up to move {Math.floor((cursor + 2) / 2)}{cursor % 2 === 0 ? '.' : '...'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={openAddBookLineModal}
+                    className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-md transition-all cursor-pointer select-none shrink-0"
+                  >
+                    📖 Add as Book Line
+                  </button>
+                </div>
+              )}
+
               {/* Game Position Note taking */}
               <div className="px-3 py-3 border-b border-zinc-800 shrink-0 font-sans space-y-2">
                 <div className="flex items-center justify-between text-[10px] uppercase font-bold tracking-wider text-zinc-550">
@@ -2018,11 +2093,96 @@ export function ChessAnalysis() {
           )}
         </div>
       </div>
-      )}
-      <GameLibrary isOpen={showLibrary} onClose={() => setShowLibrary(false)} onSelectGame={loadRawPgn} />
-    </div>
-  );
-}
+        )}
+        <GameLibrary isOpen={showLibrary} onClose={() => setShowLibrary(false)} onSelectGame={loadRawPgn} />
+
+        {/* Add Book Line Modal */}
+        {showAddBookLineModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-auto">
+            {/* Backdrop */}
+            <div 
+              onClick={() => setShowAddBookLineModal(false)} 
+              className="absolute inset-0 bg-black/75 backdrop-blur-sm transition-opacity" 
+            />
+            
+            {/* Dialog Box */}
+            <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-2xl flex flex-col gap-4 z-10 font-sans mx-4">
+              <div>
+                <h3 className="text-md font-bold text-zinc-100 flex items-center gap-2">
+                  📖 Add as Book Line
+                </h3>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Save this played variation (up to move <span className="font-mono text-blue-300 font-bold">{Math.floor((cursor + 2) / 2)}{cursor % 2 === 0 ? '.' : '...'}</span>) to your opening variations.
+                </p>
+              </div>
+
+              {addBookLineError && (
+                <div className="p-2.5 bg-rose-950/40 border border-rose-900/60 rounded-lg text-xs text-rose-400 font-medium">
+                  ⚠️ {addBookLineError}
+                </div>
+              )}
+
+              <div className="space-y-3.5">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">
+                    Variation Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newBookLineName}
+                    onChange={(e) => setNewBookLineName(e.target.value)}
+                    placeholder="e.g. Ruy Lopez: Berlin Defense"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg py-2 px-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">
+                    Practice Color Orientation
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewBookLineColor('w')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${newBookLineColor === 'w' ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold' : 'bg-zinc-955 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
+                    >
+                      White
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewBookLineColor('b')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${newBookLineColor === 'b' ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold' : 'bg-zinc-955 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
+                    >
+                      Black
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddBookLineModal(false)}
+                  className="text-xs px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-lg font-semibold transition-colors cursor-pointer border border-zinc-750"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddBookLine}
+                  disabled={!newBookLineName.trim() || isAddingBookLine}
+                  className="text-xs px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white rounded-lg font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  {isAddingBookLine ? 'Saving...' : 'Save Book Line'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
 function getSquareCoords(square: string, orientation: 'white' | 'black') {
   const colIndex = square.charCodeAt(0) - 97;
