@@ -219,46 +219,91 @@ async function loadPuzzleDetails(puzzle: any) {
   return { evaluation, bookLine, blunderEvaluation };
 }
 
-async function fetchBookLinesForFen(fenBefore: string, posPly: number) {
+async function fetchBookLinesForFenWithLimit(fenBefore: string, candidateLineId: number, lineColor: string) {
   const bookFen = normalizeBookFen(fenBefore);
-  // 1. Get the line IDs that pass through this FEN
   const lineIdsRs = await turso.execute({
     sql: 'SELECT DISTINCT line_id FROM book_moves WHERE fen_before = ?',
     args: [bookFen]
   });
   
-  if (lineIdsRs.rows.length === 0) return [];
+  if (lineIdsRs.rows.length === 0) return { bookLines: [], isSequence: false };
   
   const lineIds = lineIdsRs.rows.map(r => Number(r.line_id));
-  const linesData: { name: string; start_fen: string; moves: { san: string; uci: string; fen_after: string; ply: number }[] }[] = [];
+  const linesData: any[] = [];
+  let isSequence = false;
   
+  const checkLineId = lineIds.includes(candidateLineId) ? candidateLineId : lineIds[0];
+  
+  const checkMovesRs = await turso.execute({
+    sql: 'SELECT ply, san, uci, fen_after, fen_before FROM book_moves WHERE line_id = ? ORDER BY ply ASC',
+    args: [checkLineId]
+  });
+  const checkMoves = checkMovesRs.rows.map(r => ({
+    ply: Number(r.ply),
+    san: String(r.san),
+    uci: String(r.uci),
+    fen_after: String(r.fen_after),
+    fen_before: String(r.fen_before),
+  }));
+  
+  const startIdx = checkMoves.findIndex(m => normalizeBookFen(m.fen_before) === bookFen);
+  if (startIdx !== -1) {
+    const remainingMoves = checkMoves.slice(startIdx + 1);
+    const playerColor = lineColor || fenBefore.split(' ')[1] || 'w';
+    const hasMorePlayerMoves = remainingMoves.some(m => {
+      const isMoveWhite = m.ply % 2 === 1;
+      const isPlayerMove = (playerColor === 'w' && isMoveWhite) || (playerColor === 'b' && !isMoveWhite);
+      return isPlayerMove;
+    });
+    if (hasMorePlayerMoves) {
+      isSequence = Math.random() < 0.5;
+    }
+  }
+
   for (const lineId of lineIds.slice(0, 3)) {
     const nameRs = await turso.execute({
-      sql: 'SELECT name FROM book_lines WHERE id = ?',
+      sql: 'SELECT name, color FROM book_lines WHERE id = ?',
       args: [lineId]
     });
     const lineName = nameRs.rows[0] ? String(nameRs.rows[0].name) : `Line #${lineId}`;
+    const lineCol = nameRs.rows[0] ? String(nameRs.rows[0].color || '') : '';
     
     const movesRs = await turso.execute({
-      sql: 'SELECT ply, san, uci, fen_after FROM book_moves WHERE line_id = ? ORDER BY ply ASC',
+      sql: 'SELECT ply, san, uci, fen_after, fen_before FROM book_moves WHERE line_id = ? ORDER BY ply ASC',
       args: [lineId]
     });
     
-    const moves = movesRs.rows.map(r => ({
+    let lineMoves = movesRs.rows.map(r => ({
       ply: Number(r.ply),
       san: String(r.san),
       uci: String(r.uci),
       fen_after: String(r.fen_after),
+      fen_before: String(r.fen_before),
     }));
     
+    const sIdx = lineMoves.findIndex(m => normalizeBookFen(m.fen_before) === bookFen);
+    if (sIdx !== -1) {
+      if (isSequence) {
+        let N = Math.min(lineMoves.length - sIdx, 9);
+        if (N % 2 === 0) {
+          N = N - 1;
+        }
+        lineMoves = lineMoves.slice(0, sIdx + N);
+      } else {
+        lineMoves = lineMoves.slice(0, sIdx + 1);
+      }
+    }
+    
     linesData.push({
+      id: lineId,
       name: lineName,
+      color: lineCol,
       start_fen: STARTING_FEN,
-      moves,
+      moves: lineMoves,
     });
   }
   
-  return linesData;
+  return { bookLines: linesData, isSequence };
 }
 
 async function getLineIdsForOpening(openingId: number): Promise<number[]> {
@@ -280,10 +325,28 @@ function matchLinesToPrefix(rows: any[], prefix: string): number[] {
 }
 
 async function fetchBookCandidates(lineIds?: number[], color?: string) {
-  let sql = 'SELECT DISTINCT fen_before, line_id FROM book_moves WHERE 1=1';
+  let sql = `
+    SELECT DISTINCT bm.fen_before, bm.line_id 
+    FROM book_moves bm
+    JOIN book_lines bl ON bm.line_id = bl.id
+    LEFT JOIN book_moves prev ON bm.line_id = prev.line_id AND prev.ply = bm.ply - 1
+    WHERE (bl.color IS NULL OR bl.color = '' OR SUBSTR(bm.fen_before, INSTR(bm.fen_before, ' ') + 1, 1) = bl.color)
+      AND NOT (
+        prev.id IS NOT NULL
+        AND bm.san LIKE '%x%' 
+        AND prev.san LIKE '%x%' 
+        AND SUBSTR(bm.uci, 3, 2) = SUBSTR(prev.uci, 3, 2)
+      )
+  `;
   const args: any[] = [];
-  if (lineIds?.length) { sql += ` AND line_id IN (${lineIds.map(() => '?').join(',')})`; args.push(...lineIds); }
-  if (color) sql += ` AND fen_before LIKE '% ${color} %'`;
+  if (lineIds?.length) {
+    sql += ` AND bm.line_id IN (${lineIds.map(() => '?').join(',')})`;
+    args.push(...lineIds);
+  }
+  if (color) {
+    sql += ` AND SUBSTR(bm.fen_before, INSTR(bm.fen_before, ' ') + 1, 1) = ?`;
+    args.push(color);
+  }
   const rs = await turso.execute({ sql, args });
   return rs.rows.map(r => ({ fen: String(r.fen_before), line_id: Number(r.line_id) }));
 }
@@ -299,29 +362,36 @@ async function retryBookPuzzle(openingId?: number, color?: string, days?: number
   return fetchBookPuzzle(openingId, color, days, true);
 }
 
-function createBookPuzzleObj(sel: any, moves: any[], bmMain: any, lineName: string, bookLines: any[]) {
+function createBookPuzzleObj(sel: any, moves: any[], bmMain: any, lineName: string, lineColor: string, isSequence: boolean, bookLines: any[]) {
   const ucis = moves.map(r => String(r.uci)), sans = moves.map(r => String(r.san));
   return {
     id: -sel.line_id * 1000 - Math.floor(Math.random() * 1000), type: 'book', game_id: null,
     start_fen: sel.fen, solution_uci: String(bmMain.uci), solution_san: String(bmMain.san),
-    player_color: sel.fen.split(' ')[1] || 'w', description: 'Find the correct book move in this position!',
+    player_color: lineColor || sel.fen.split(' ')[1] || 'w', 
+    is_sequence: isSequence,
+    description: isSequence 
+      ? 'Find the correct sequence of book moves in this position!' 
+      : 'Find the correct book move in this position!',
     blunder_uci: null, blunder_san: null, game_title: `Book practice: ${lineName}`,
     valid_moves: ucis, valid_moves_san: sans, game_pgn: null, book_lines: bookLines
   };
 }
 
-async function fetchLineName(lineId: number): Promise<string> {
-  const lineRs = await turso.execute({ sql: 'SELECT name FROM book_lines WHERE id = ?', args: [lineId] });
-  return lineRs.rows[0] ? String(lineRs.rows[0].name) : 'Book Line';
+async function fetchLineDetails(lineId: number): Promise<{ name: string; color: string }> {
+  const lineRs = await turso.execute({ sql: 'SELECT name, color FROM book_lines WHERE id = ?', args: [lineId] });
+  return {
+    name: lineRs.rows[0] ? String(lineRs.rows[0].name) : 'Book Line',
+    color: lineRs.rows[0] ? String(lineRs.rows[0].color || '') : ''
+  };
 }
 
 async function buildBookPuzzleFromCandidate(selected: { fen: string; line_id: number }) {
   const moves = (await turso.execute({ sql: 'SELECT uci, san, is_mainline, ply FROM book_moves WHERE fen_before = ?', args: [selected.fen] })).rows;
   if (moves.length === 0) return null;
   const bmMain = moves.find(r => Number(r.is_mainline) === 1) || moves[0];
-  const lineName = await fetchLineName(selected.line_id);
-  const bLines = await fetchBookLinesForFen(selected.fen, Number(bmMain.ply));
-  const puzzle = createBookPuzzleObj(selected, moves, bmMain, lineName, bLines);
+  const { name: lineName, color: lineColor } = await fetchLineDetails(selected.line_id);
+  const { bookLines, isSequence } = await fetchBookLinesForFenWithLimit(selected.fen, selected.line_id, lineColor);
+  const puzzle = createBookPuzzleObj(selected, moves, bmMain, lineName, lineColor, isSequence, bookLines);
   const [evaluation, bookLine] = await Promise.all([fetchEvaluationForFen(selected.fen), fetchBookLineForGame('', selected.fen)]);
   return { puzzle, evaluation, bookLine };
 }
@@ -329,12 +399,92 @@ async function buildBookPuzzleFromCandidate(selected: { fen: string; line_id: nu
 async function fetchBookPuzzle(openingId?: number, color?: string, days?: number, isRetry = false): Promise<any> {
   const lineIds = openingId !== undefined ? await getLineIdsForOpening(openingId) : undefined;
   if (openingId !== undefined && lineIds?.length === 0) return null;
-  const candidates = await fetchBookCandidates(lineIds, color);
-  if (candidates.length === 0) return null;
+
+  // Determine target color to ensure even white/black distribution if no color is specified
+  let targetColor = color;
+  if (!targetColor) {
+    targetColor = Math.random() < 0.5 ? 'w' : 'b';
+  }
+
+  // Fetch candidates for targetColor
+  let candidates = await fetchBookCandidates(lineIds, targetColor);
   const solved = await fetchSolvedFens();
-  const active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
-  if (active.length === 0) return retryBookPuzzle(openingId, color, days, isRetry);
-  return buildBookPuzzleFromCandidate(active[Math.floor(Math.random() * active.length)]);
+  let active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
+
+  // Fallback to the other color if no active candidates exist for targetColor and no color was specified
+  if (active.length === 0 && !color) {
+    const fallbackColor = targetColor === 'w' ? 'b' : 'w';
+    candidates = await fetchBookCandidates(lineIds, fallbackColor);
+    active = candidates.filter(c => !solved.has(normalizeBookFen(c.fen)));
+  }
+
+  if (active.length === 0) {
+    return retryBookPuzzle(openingId, color, days, isRetry);
+  }
+
+  // Sample up to 200 candidates to lookup play count in position_moves
+  const sampleSize = Math.min(200, active.length);
+  const samples: typeof active = [];
+  const sampleIndices = new Set<number>();
+  while (samples.length < sampleSize) {
+    const idx = Math.floor(Math.random() * active.length);
+    if (!sampleIndices.has(idx)) {
+      sampleIndices.add(idx);
+      samples.push(active[idx]);
+    }
+  }
+
+  // Group by normalized 3-part FEN (piece placement, active color, castling rights)
+  const normFenToSamples = new Map<string, typeof active>();
+  samples.forEach(s => {
+    const parts = s.fen.split(' ');
+    const norm = `${parts[0]} ${parts[1]} ${parts[2]}`;
+    if (!normFenToSamples.has(norm)) {
+      normFenToSamples.set(norm, []);
+    }
+    normFenToSamples.get(norm)!.push(s);
+  });
+
+  const uniqueNormFens = Array.from(normFenToSamples.keys());
+  const playCountsMap = new Map<string, number>();
+
+  if (uniqueNormFens.length > 0) {
+    const placeholders = uniqueNormFens.map(() => '?').join(',');
+    const querySql = `
+      SELECT fen_norm, SUM(wins + draws + losses) as play_count
+      FROM position_moves
+      WHERE fen_norm IN (${placeholders})
+      GROUP BY fen_norm
+    `;
+    const rs = await turso.execute({ sql: querySql, args: uniqueNormFens });
+    rs.rows.forEach(r => {
+      playCountsMap.set(String(r.fen_norm), Number(r.play_count));
+    });
+  }
+
+  // Calculate weights using smooth logarithmic scale: weight = 1 + log2(1 + count) * 5
+  let totalWeight = 0;
+  const weightedSamples = samples.map(s => {
+    const parts = s.fen.split(' ');
+    const norm = `${parts[0]} ${parts[1]} ${parts[2]}`;
+    const count = playCountsMap.get(norm) || 0;
+    const weight = 1 + Math.log2(1 + count) * 5;
+    totalWeight += weight;
+    return { candidate: s, weight };
+  });
+
+  // Weighted random selection
+  let r = Math.random() * totalWeight;
+  let selected = weightedSamples[weightedSamples.length - 1].candidate;
+  for (const item of weightedSamples) {
+    r -= item.weight;
+    if (r <= 0) {
+      selected = item.candidate;
+      break;
+    }
+  }
+
+  return buildBookPuzzleFromCandidate(selected);
 }
 
 function getGamePlyForFen(pgn: string, targetFen3: string): number {
