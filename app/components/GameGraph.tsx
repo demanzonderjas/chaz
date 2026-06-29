@@ -19,8 +19,8 @@ const getPointCoords = (index: number, score: number, total: number, width: numb
   return { x, y: height - wp * height };
 };
 
-const getPoint = (ann: MoveAnnotation, i: number, total: number, width: number, height: number, lastY: number) => {
-  if (ann.isCheckmate || ann.score === undefined) {
+const getPoint = (ann: MoveAnnotation | undefined | null, i: number, total: number, width: number, height: number, lastY: number) => {
+  if (!ann || ann.isCheckmate || ann.score === undefined) {
     const x = total > 1 ? ((i + 1) / total) * width : 0;
     return { x, y: lastY, index: i };
   }

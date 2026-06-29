@@ -158,7 +158,7 @@ const queueMoveEvaluation = (ctx: AnalysisContext, i: number, before: string, af
 function hasPrevOpponentDev(prev: MoveAnnotation[], playerColor?: 'white' | 'black') {
   return prev.some((ann, idx) => {
     const isOppIdx = playerColor === undefined || idx % 2 === (playerColor === 'white' ? 1 : 0);
-    return isOppIdx && ann.isMissedBook;
+    return isOppIdx && ann?.isMissedBook;
   });
 }
 
