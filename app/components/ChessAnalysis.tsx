@@ -964,13 +964,16 @@ export function ChessAnalysis() {
       const promo = getPromotionPiece(piece.pieceType, targetSquare);
       const entry = executeMove(currentFen, sourceSquare, targetSquare, promo);
       if (!entry) return false;
-      if (!baseState) setBaseState({ history, cursor });
-      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen, orientation);
+      const isVariation = baseState !== null || cursor < history.length - 1 || activeGame !== null;
+      if (isVariation && !baseState) {
+        setBaseState({ history, cursor });
+      }
+      updateHistoryAndCursor(entry, cursor, setHistory, setCursor, analyzeLastMove, initialFen, orientation, !isVariation);
       return true;
     },
     [
       mode, activeBookLine, quizMode, quizStatus, activeBookMoveIdx, solvedMoveIdx, quizMistakes, reviewQueue, currentReviewIdx,
-      currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation, boardFen, setTempWrongFen
+      currentFen, cursor, analyzeLastMove, initialFen, baseState, history, orientation, boardFen, setTempWrongFen, activeGame
     ]
   );
 
@@ -1038,11 +1041,16 @@ export function ChessAnalysis() {
     setExplorerLine(null);
     const chess = new Chess(currentFen), m = tryMakeMove(chess, uci);
     if (!m) return;
-    if (!baseState) setBaseState({ history, cursor });
+    const isVariation = baseState !== null || cursor < history.length - 1 || activeGame !== null;
+    if (isVariation && !baseState) {
+      setBaseState({ history, cursor });
+    }
     const next = [...history.slice(0, cursor + 1), { fen: chess.fen(), san: m.san, to: m.to }];
     setHistory(next); setCursor(next.length - 1); playMoveSound(m.san.includes('x'));
-    setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
-  }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState, orientation]);
+    if (!isVariation) {
+      setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
+    }
+  }, [currentFen, cursor, history, analyzeLastMove, initialFen, baseState, orientation, activeGame]);
 
   const unloadGame = useCallback(() => {
     setActiveGame(null);
@@ -1272,12 +1280,12 @@ export function ChessAnalysis() {
                     depth {analysisDepth}
                   </span>
                 )}
-                <button onClick={startPracticeMode} disabled={loadingGameMistakes}
-                  className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50">
+                <button onClick={startPracticeMode} disabled={loadingGameMistakes || baseState !== null}
+                  className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                   {loadingGameMistakes ? 'Loading...' : '🧩 Practice Mistakes'}
                 </button>
-                <button onClick={() => analyzeGame(history, initialFen, orientation)}
-                  className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors">
+                <button onClick={() => analyzeGame(history, initialFen, orientation)} disabled={baseState !== null}
+                  className="text-xs px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                   Re-analyze
                 </button>
               </>
@@ -1395,7 +1403,26 @@ export function ChessAnalysis() {
             <CustomBoardArrows arrows={mode === 'book-explorer' && quizMode !== 'study' ? [] : arrows} orientation={orientation} />
           </div>
           <div className="w-full overflow-visible" style={{ maxWidth: 'min(calc(100vh - 280px), calc(100vw - 820px))' }}>
-            <GameGraph annotations={annotations} currentIndex={cursor} onSelect={(i) => { setCursor(i); setExplorerLine(null); }} />
+            <GameGraph
+              annotations={annotations}
+              currentIndex={baseState !== null ? baseState.cursor : cursor}
+              onSelect={(i) => {
+                if (baseState !== null) {
+                  setHistory(baseState.history);
+                  setCursor(i);
+                  if (baseState.initialFen) {
+                    setInitialFen(baseState.initialFen);
+                  }
+                  if (baseState.previousMode) {
+                    setMode(baseState.previousMode);
+                  }
+                  setBaseState(null);
+                } else {
+                  setCursor(i);
+                }
+                setExplorerLine(null);
+              }}
+            />
           </div>
         </div>
 
@@ -2380,10 +2407,12 @@ function findTargetCursor(entries: HistoryEntry[], sf: string, startFen: string)
   return idx !== -1 ? idx : -1;
 }
 
-function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any, initialFen: string, orientation?: 'white' | 'black') {
+function updateHistoryAndCursor(entry: HistoryEntry, cursor: number, setHistory: any, setCursor: any, analyzeLastMove: any, initialFen: string, orientation?: 'white' | 'black', shouldAnalyze = true) {
   setHistory((prev: HistoryEntry[]) => {
     const next = [...prev.slice(0, cursor + 1), entry];
-    setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
+    if (shouldAnalyze) {
+      setTimeout(() => analyzeLastMove(next, initialFen, orientation), 0);
+    }
     return next;
   });
   setCursor((c: number) => c + 1); playMoveSound(entry.san.includes('x'));
