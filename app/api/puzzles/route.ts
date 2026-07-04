@@ -679,6 +679,44 @@ async function fetchWeaknessPuzzle(openingId?: number, color?: string, days?: nu
   return sel ? buildWeaknessPuzzleResult(sel) : null;
 }
 
+async function fetchBrilliantPuzzle(openingId?: number, color?: string, days?: number) {
+  let sql = 'SELECT bm.*, g.pgn FROM brilliant_moves bm JOIN games g ON bm.game_id = g.id WHERE 1=1';
+  const args: any[] = [];
+  if (openingId) {
+    sql += ' AND g.opening_id = ?';
+    args.push(openingId);
+  }
+  if (color) {
+    sql += ' AND bm.player_color = ?';
+    args.push(color);
+  }
+  if (days) {
+    sql += ` AND g.played_date >= date('now', '-${days} days')`;
+  }
+  sql += ' ORDER BY RANDOM() LIMIT 1';
+  
+  const rs = await turso.execute({ sql, args });
+  if (rs.rows.length === 0) return null;
+  
+  const r = rs.rows[0];
+  return {
+    id: -500000 - Number(r.id),
+    type: 'brilliant',
+    game_id: r.game_id,
+    start_fen: r.fen_before,
+    solution_uci: r.played_uci,
+    solution_san: r.played_san,
+    best_uci: r.played_uci,
+    best_san: r.played_san,
+    user_color: r.player_color,
+    description: `You played a brilliant sacrifice here! Can you find it again?`,
+    blunder_uci: '',
+    blunder_san: '',
+    game_title: r.game_title,
+    game_pgn: String(r.pgn)
+  };
+}
+
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
   const type = req.nextUrl.searchParams.get('type') || 'tactical';
@@ -700,6 +738,12 @@ export async function GET(req: NextRequest) {
       const data = await fetchWeaknessPuzzle(openingId, color, days);
       if (!data) return NextResponse.json({ error: 'No weakness puzzles found' }, { status: 404 });
       return NextResponse.json(data);
+    }
+    if (type === 'brilliant') {
+      const puzzle = await fetchBrilliantPuzzle(openingId, color, days);
+      if (!puzzle) return NextResponse.json({ error: 'No brilliant puzzles found' }, { status: 404 });
+      const details = await loadPuzzleDetails(puzzle);
+      return NextResponse.json({ puzzle, ...details });
     }
     const puzzle = id ? await fetchPuzzleById(id) : await fetchRandomPuzzle(type, openingId, color, days);
     if (!puzzle) return NextResponse.json({ error: 'No puzzles found' }, { status: 404 });
@@ -977,8 +1021,12 @@ async function handleStd(game: any, startFen: string, bestUci: string, i: number
 }
 
 async function insertBrilliantMove(gameId: number, fenBefore: string, fenAfter: string, playedUci: string, playedSan: string, playerColor: string, gameTitle: string) {
-  const sql = `INSERT INTO brilliant_moves (game_id, fen_before, fen_after, played_uci, played_san, player_color, game_title) VALUES (?, ?, ?, ?, ?, ?, ?)`;
   try {
+    const checkSql = `SELECT 1 FROM brilliant_moves WHERE game_id = ? AND fen_before = ? LIMIT 1`;
+    const checkRs = await turso.execute({ sql: checkSql, args: [gameId, fenBefore] });
+    if (checkRs.rows.length > 0) return true; // Already exists
+
+    const sql = `INSERT INTO brilliant_moves (game_id, fen_before, fen_after, played_uci, played_san, player_color, game_title) VALUES (?, ?, ?, ?, ?, ?, ?)`;
     await turso.execute({ sql, args: [gameId, fenBefore, fenAfter, playedUci, playedSan, playerColor, gameTitle] });
     return true;
   } catch (err) {
@@ -1008,7 +1056,7 @@ async function processMoveIndex(game: any, history: any[], fens: string[], normF
     const wpBefore = getWinProbability(cpBefore);
     const wpAfter = getWinProbability(cpAfter);
     const wpLoss = wpBefore - wpAfter;
-    if (wpLoss <= 0.05 && wpAfter >= 0.20) {
+    if (wpLoss <= 0.05 && wpAfter >= 0.20 && Math.abs(cpBefore) <= 800) {
       const playedUci = history[i].from + history[i].to + (history[i].promotion || '');
       const isBookMove = bookMoves.has(`${normalizeBookFen(fens[i])}|${playedUci}`);
       if (!isBookMove && isSacrifice(fens[i], fens[i + 1], ea.pv, playerColor)) {

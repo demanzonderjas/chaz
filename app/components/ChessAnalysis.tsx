@@ -276,7 +276,7 @@ export function ChessAnalysis() {
   }, [quizMode, solvedMoveIdx, reviewQueue, currentReviewIdx]);
 
   const { ready, evaluation, analyse, stopLive } = useStockfish();
-  const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis } = useGameAnalysis();
+  const { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset: resetAnalysis, injectBrilliantMoves } = useGameAnalysis();
 
   const currentFen = (cursor < 0 || !history[cursor]) ? initialFen : history[cursor].fen;
   const currentColor = (cursor < 0 ? 'w' : cursor % 2 === 0 ? 'b' : 'w') as 'w' | 'b';
@@ -1071,25 +1071,25 @@ export function ChessAnalysis() {
     setMode('analysis');
   }, []);
 
-  const loadRawPgn = useCallback((pgn: string, id?: number) => {
+  const loadRawPgn = useCallback((pgn: string, id?: number, brilliantMoves?: string[]) => {
     unloadGame();
     const { sf, entries } = parsePgn(pgn);
     setInitialFen(sf);
     setHistory(entries);
     setCursor(-1);
     resetAnalysis();
-    analyzeGame(entries, sf, getPlayerOrientation(pgn));
+    analyzeGame(entries, sf, getPlayerOrientation(pgn), brilliantMoves);
     importGameData(pgn, id);
     setMode('analysis');
   }, [analyzeGame, resetAnalysis, unloadGame, importGameData]);
 
-  const loadGameFromPuzzle = useCallback((pgn: string, startFen: string, id?: number) => {
+  const loadGameFromPuzzle = useCallback((pgn: string, startFen: string, id?: number, brilliantMoves?: string[]) => {
     unloadGame();
     const { sf, entries } = parsePgn(pgn);
     setInitialFen(sf);
     setHistory(entries);
     resetAnalysis();
-    analyzeGame(entries, sf, getPlayerOrientation(pgn));
+    analyzeGame(entries, sf, getPlayerOrientation(pgn), brilliantMoves);
     setupGameMeta(pgn, setOrientation, setActiveGame, id);
     finishPuzzleLoad(entries, sf, startFen);
   }, [analyzeGame, resetAnalysis, unloadGame, finishPuzzleLoad]);
@@ -1099,7 +1099,7 @@ export function ChessAnalysis() {
       const res = await fetch(`/api/games?id=${gameId}`);
       const data = await res.json();
       if (data.pgn) {
-        loadGameFromPuzzle(data.pgn, fenBefore, gameId);
+        loadGameFromPuzzle(data.pgn, fenBefore, gameId, data.brilliantMoves);
       }
     } catch (err) {
       console.error('Failed to load brilliant move game', err);

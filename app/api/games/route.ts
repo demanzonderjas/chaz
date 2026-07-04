@@ -34,7 +34,12 @@ async function fetchGamesList(openingId?: number, color?: string) {
 }
 
 async function handleGetRequest(id: string | null, openingId?: number, color?: string) {
-  if (id) return { pgn: await fetchGamePgn(id) };
+  if (id) {
+    const pgn = await fetchGamePgn(id);
+    const rs = await turso.execute({ sql: 'SELECT fen_before FROM brilliant_moves WHERE game_id = ?', args: [id] });
+    const brilliantMoves = rs.rows.map(r => String(r.fen_before));
+    return { pgn, brilliantMoves };
+  }
   return { games: await fetchGamesList(openingId, color) };
 }
 

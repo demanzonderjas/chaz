@@ -443,7 +443,7 @@ const BlunderBadge = () => (
   </div>
 );
 
-type PuzzleType = 'tactical' | 'zwischenzug' | 'book' | 'weakness' | 'opening' | 'winning_position' | 'endgame' | 'defensive';
+type PuzzleType = 'tactical' | 'zwischenzug' | 'book' | 'weakness' | 'opening' | 'winning_position' | 'endgame' | 'defensive' | 'brilliant';
 
 const PUZZLE_TYPES = [
   { id: 'tactical', label: 'Tactical' },
@@ -454,6 +454,7 @@ const PUZZLE_TYPES = [
   { id: 'winning_position', label: 'Winning' },
   { id: 'endgame', label: 'Endgame' },
   { id: 'defensive', label: 'Defensive' },
+  { id: 'brilliant', label: 'Brilliant' },
 ] as const;
 
 export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoadGame?: (pgn: string, startFen: string, gameId: number) => void }) {
@@ -821,23 +822,23 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
           </div>
         ) : (
           <div className="relative aspect-square shadow-2xl rounded-lg overflow-hidden border border-zinc-800/40" style={{ width: 'min(calc(100vh - 120px), calc(100vw - 440px))' }}>
-            <ChessboardProvider
-              options={{
-                position: boardFen,
-                boardOrientation: puzzle.player_color === 'w' ? 'white' : 'black',
-                onPieceDrop,
-                squareRenderer,
-                darkSquareStyle: { backgroundColor: '#b58863' },
-                lightSquareStyle: { backgroundColor: '#f0d9b5' },
-              }}
-            >
+              <ChessboardProvider
+                options={{
+                  position: boardFen,
+                  boardOrientation: (puzzle.user_color || puzzle.player_color) === 'w' ? 'white' : 'black',
+                  onPieceDrop,
+                  squareRenderer,
+                  darkSquareStyle: { backgroundColor: '#b58863' },
+                  lightSquareStyle: { backgroundColor: '#f0d9b5' },
+                }}
+              >
               <Chessboard />
             </ChessboardProvider>
             {puzzle.blunder_uci && (
               <BlunderArrow
                 from={puzzle.blunder_uci.slice(0, 2)}
                 to={puzzle.blunder_uci.slice(2, 4)}
-                orientation={puzzle.player_color === 'w' ? 'white' : 'black'}
+                orientation={(puzzle.user_color || puzzle.player_color) === 'w' ? 'white' : 'black'}
               />
             )}
           </div>

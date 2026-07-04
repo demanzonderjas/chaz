@@ -25,6 +25,7 @@ interface AnalysisContext {
   scoresRef: React.MutableRefObject<Record<number, { score: number; pv?: string[] }>>;
   historyRef: React.MutableRefObject<HistoryEntry[]>;
   setAnalysisDepth: (val: number | null) => void;
+  brilliantMovesRef: React.MutableRefObject<string[]>;
 }
 
 async function fetchBookData(positions: { fen: string; san: string }[]) {
@@ -54,8 +55,11 @@ function isSacrifice(fenBefore: string, fenAfter: string, pvAfter: string[], pla
     const chess = new Chess(fenAfter);
     
     const balAfterMove = getMaterialBalance(chess.fen()) * (playerColor === 'w' ? 1 : -1);
-    if (balAfterMove <= startBal - 2) return true; 
-
+    if (balAfterMove <= startBal - 2) {
+      console.log('SAC FOUND (immediate):', fenBefore, { startBal, balAfterMove });
+      return true;
+    }
+    
     if (pvAfter && pvAfter.length > 0) {
       const m0 = pvAfter[0];
       const move0 = chess.move({ from: m0.slice(0, 2), to: m0.slice(2, 4), promotion: m0[4] });
@@ -65,15 +69,23 @@ function isSacrifice(fenBefore: string, fenAfter: string, pvAfter: string[], pla
       if (pvAfter.length > 1) {
         const m1 = pvAfter[1];
         const move1 = chess.move({ from: m1.slice(0, 2), to: m1.slice(2, 4), promotion: m1[4] });
-        if (!move1) return balAfterOpp <= startBal - 2;
+        if (!move1) {
+          if (balAfterOpp <= startBal - 2) console.log('SAC FOUND (depth 1):', fenBefore, { startBal, balAfterOpp });
+          return balAfterOpp <= startBal - 2;
+        }
         const balAfterUs = getMaterialBalance(chess.fen()) * (playerColor === 'w' ? 1 : -1);
-        return balAfterOpp <= startBal - 2 && balAfterUs <= startBal - 2;
+        if (balAfterOpp <= startBal - 2 && balAfterUs <= startBal - 2) {
+          console.log('SAC FOUND (depth 2):', fenBefore, { startBal, balAfterOpp, balAfterUs });
+          return true;
+        }
       } else {
+        if (balAfterOpp <= startBal - 2) console.log('SAC FOUND (depth 1, no m1):', fenBefore, { startBal, balAfterOpp });
         return balAfterOpp <= startBal - 2;
       }
     }
     return false;
-  } catch { 
+  } catch (e) {
+    console.error('isSacrifice error:', e);
     return false; 
   }
 }
@@ -82,19 +94,28 @@ function classifyMove(cpBefore: number, cpAfter: number, hasSacrifice: boolean):
   const wpBefore = getWinProbability(cpBefore);
   const wpAfter = getWinProbability(cpAfter);
   const wpLoss = wpBefore - wpAfter;
-  if (hasSacrifice && wpLoss <= 0.10 && wpAfter >= 0.20) return 'brilliant';
+  if (hasSacrifice) {
+    console.log('SACRIFICE DETECTED!', { cpBefore, cpAfter, wpLoss, wpAfter, isBrilliant: wpLoss <= 0.10 && wpAfter >= 0.20 });
+  }
+  if (hasSacrifice && wpLoss <= 0.10 && wpAfter >= 0.20 && Math.abs(cpBefore) <= 800) return 'brilliant';
   if (wpLoss >= 0.20) return 'blunder';
   if (wpLoss >= 0.10) return 'mistake';
   return null;
 }
 
 const getUpdatedAnnotation = (existing: MoveAnnotation, cpBefore: number, cpAfter: number, afterScore: number, hasSac: boolean) => {
-  const types: AnnotationType[] = (existing.types ?? []).filter((t) => t === 'book');
-  const isBook = types.includes('book');
-  let engineType = isBook ? null : classifyMove(cpBefore, cpAfter, hasSac);
-  if (!isBook && existing.isMissedBook && !engineType) engineType = 'missed_book';
+  const isBook = (existing.types ?? []).includes('book');
+  const isPreBrilliant = (existing.types ?? []).includes('brilliant');
+  const types: AnnotationType[] = (existing.types ?? []).filter((t) => t === 'book' || t === 'brilliant');
+  
+  if (isBook || isPreBrilliant) {
+    return { ...existing, types, cpLoss: isBook ? 0 : cpBefore - cpAfter, score: afterScore };
+  }
+  
+  let engineType = classifyMove(cpBefore, cpAfter, hasSac);
+  if (existing.isMissedBook && !engineType) engineType = 'missed_book';
   if (engineType) types.push(engineType);
-  return { ...existing, types, cpLoss: isBook ? 0 : cpBefore - cpAfter, score: afterScore };
+  return { ...existing, types, cpLoss: cpBefore - cpAfter, score: afterScore };
 };
 
 const updateMoveAnnotation = (ctx: AnalysisContext, moveIdx: number) => {
@@ -172,13 +193,32 @@ const initBookAnnotations = async (ctx: AnalysisContext, history: HistoryEntry[]
   ctx.setAnnotations(buildBookAnnotations(history, data, firstOppDev, playerColor));
 };
 
-export const analyzeGameImpl = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN, playerColor?: 'white' | 'black') => {
+export const analyzeGameImpl = async (ctx: AnalysisContext, history: HistoryEntry[], startFen = STARTING_FEN, playerColor?: 'white' | 'black', brilliantMoves?: string[]) => {
   if (!history.length) return;
   ctx.historyRef.current = history;
+  if (brilliantMoves) ctx.brilliantMovesRef.current = brilliantMoves;
+  else ctx.brilliantMovesRef.current = [];
+
   ctx.setAnalyzing(true);
   ctx.setProgress(0);
   ctx.scoresRef.current = {};
   await initBookAnnotations(ctx, history, startFen, playerColor);
+  
+  if (ctx.brilliantMovesRef.current.length > 0) {
+    ctx.setAnnotations(prev => {
+      const next = [...prev];
+      history.forEach((h, i) => {
+        const fenBefore = i === 0 ? startFen : history[i - 1].fen;
+        if (ctx.brilliantMovesRef.current.includes(fenBefore)) {
+          const types = [...(next[i]?.types || [])];
+          if (!types.includes('brilliant')) types.push('brilliant');
+          next[i] = { ...next[i], types };
+        }
+      });
+      return next;
+    });
+  }
+
   registerSchedulerCallbacks(ctx);
   const tasks = createAnnotationTasks(ctx, [startFen, ...history.map((h) => h.fen)]);
   stockfishScheduler.addAnnotationTasks(tasks);
@@ -245,9 +285,26 @@ export function useGameAnalysis() {
   const [analysisDepth, setAnalysisDepth] = useState<number | null>(null);
   const scoresRef = useRef<Record<number, { score: number; pv?: string[] }>>({});
   const historyRef = useRef<HistoryEntry[]>([]);
-  const ctx = { setAnnotations, setAnalyzing, setProgress, scoresRef, historyRef, setAnalysisDepth };
-  const analyzeGame = useCallback((h: HistoryEntry[], sf?: string, pc?: 'white' | 'black') => analyzeGameImpl(ctx, h, sf, pc), []);
+  const brilliantMovesRef = useRef<string[]>([]);
+  const ctx = { setAnnotations, setAnalyzing, setProgress, scoresRef, historyRef, setAnalysisDepth, brilliantMovesRef };
+  const analyzeGame = useCallback((h: HistoryEntry[], sf?: string, pc?: 'white' | 'black', bm?: string[]) => analyzeGameImpl(ctx, h, sf, pc, bm), []);
   const analyzeLastMove = useCallback((h: HistoryEntry[], sf?: string, pc?: 'white' | 'black') => analyzeLastMoveImpl(ctx, h, sf, pc), []);
   const reset = useCallback(() => resetGameAnalysis(ctx), []);
-  return { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset };
+  
+  const injectBrilliantMoves = useCallback((fens: string[]) => {
+    setAnnotations(prev => {
+      const next = [...prev];
+      historyRef.current.forEach((h, i) => {
+        const fenBefore = i === 0 ? STARTING_FEN : historyRef.current[i - 1].fen;
+        if (fens.includes(fenBefore)) {
+          const types = [...(next[i]?.types || [])];
+          if (!types.includes('brilliant')) types.push('brilliant');
+          next[i] = { ...next[i], types };
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  return { annotations, analyzing, progress, analysisDepth, analyzeGame, analyzeLastMove, reset, injectBrilliantMoves };
 }
