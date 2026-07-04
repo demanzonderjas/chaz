@@ -274,7 +274,7 @@ export async function getWorstBookLinesByPeriod() {
 }
 
 export async function getBrilliantMoves() {
-  const sql = `SELECT * FROM brilliant_moves ORDER BY created_at DESC, id DESC LIMIT 50`;
+  const sql = `SELECT bm.*, g.played_date FROM brilliant_moves bm JOIN games g ON bm.game_id = g.id ORDER BY g.played_date DESC, bm.id DESC LIMIT 500`;
   const rs = await turso.execute(sql);
   return rs.rows.map(r => ({
     id: Number(r.id),
@@ -286,6 +286,7 @@ export async function getBrilliantMoves() {
     playerColor: String(r.player_color),
     gameTitle: String(r.game_title),
     createdAt: String(r.created_at),
+    date: String(r.played_date),
   }));
 }
 

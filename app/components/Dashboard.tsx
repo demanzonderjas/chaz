@@ -220,14 +220,15 @@ const filterDataByPeriod = (items: any[], period: string) => {
 };
 
 export const DashboardContent = ({ data, speed, setSpeed, onExit, onPracticeLine, onViewBrilliantMove }: any) => {
-  const [period, setPeriod] = useState<string>('all');
+  const [period, setPeriod] = useState<string>('7');
   const filteredGames = filterDataByPeriod(data.openingsStats || [], period);
   const grouped = groupGamesByOpening(filteredGames);
   const winRates = computeOpeningWinRates(grouped);
   const suggestions = generateSuggestions(winRates);
   const list = (period === '7' || period === '30') ? data.eloHistory?.[speed]?.daily : data.eloHistory?.[speed]?.weekly;
   const points = filterDataByPeriod(list || [], period);
-  return <DashboardLayout data={data} speed={speed} setSpeed={setSpeed} period={period} setPeriod={setPeriod} winRates={winRates} suggestions={suggestions} points={points} onExit={onExit} onPracticeLine={onPracticeLine} brilliantMoves={data.brilliantMoves || []} onViewBrilliantMove={onViewBrilliantMove} />;
+  const filteredBrilliantMoves = filterDataByPeriod(data.brilliantMoves || [], period).slice(0, 50);
+  return <DashboardLayout data={data} speed={speed} setSpeed={setSpeed} period={period} setPeriod={setPeriod} winRates={winRates} suggestions={suggestions} points={points} onExit={onExit} onPracticeLine={onPracticeLine} brilliantMoves={filteredBrilliantMoves} onViewBrilliantMove={onViewBrilliantMove} />;
 };
 
 const DashboardLayout = ({ data, speed, setSpeed, period, setPeriod, winRates, suggestions, points, onExit, onPracticeLine, brilliantMoves, onViewBrilliantMove }: any) => {
