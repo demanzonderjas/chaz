@@ -273,13 +273,29 @@ export async function getWorstBookLinesByPeriod() {
   return { all, "7": p7, "30": p30, "90": p90, "365": p365 };
 }
 
+export async function getBrilliantMoves() {
+  const sql = `SELECT * FROM brilliant_moves ORDER BY created_at DESC, id DESC LIMIT 50`;
+  const rs = await turso.execute(sql);
+  return rs.rows.map(r => ({
+    id: Number(r.id),
+    gameId: Number(r.game_id),
+    fenBefore: String(r.fen_before),
+    fenAfter: String(r.fen_after),
+    playedUci: String(r.played_uci),
+    playedSan: String(r.played_san),
+    playerColor: String(r.player_color),
+    gameTitle: String(r.game_title),
+    createdAt: String(r.created_at),
+  }));
+}
+
 export async function getDashboardData() {
-  const [games, notes, bookLines, bookMoves, puzzles, pStats, openings, gamesList, opStats, worstBookLines] = await Promise.all([
+  const [games, notes, bookLines, bookMoves, puzzles, pStats, openings, gamesList, opStats, worstBookLines, brilliantMoves] = await Promise.all([
     getGamesCount(), getNotesCount(), getBookLinesCount(), getBookMovesCount(),
     getPuzzlesCount(), getPuzzleStats(), getTopOpenings(), fetchGamesForDashboard(),
-    fetchOpeningStats(), getWorstBookLinesByPeriod()
+    fetchOpeningStats(), getWorstBookLinesByPeriod(), getBrilliantMoves()
   ]);
   const processed = processEloAndOutcomes(gamesList);
-  return { counts: { games, notes, bookLines, bookMoves, puzzles, puzzleStats: pStats }, openings, openingsStats: opStats, worstBookLines, ...processed };
+  return { counts: { games, notes, bookLines, bookMoves, puzzles, puzzleStats: pStats }, openings, openingsStats: opStats, worstBookLines, brilliantMoves, ...processed };
 }
 

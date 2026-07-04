@@ -31,7 +31,7 @@ export interface AnnotationTask {
   fen: string;
   color: 'w' | 'b';
   depth: number;
-  onScore: (score: number) => void;
+  onScore: (score: number, pv?: string[]) => void;
 }
 
 class StockfishScheduler {
@@ -197,7 +197,7 @@ class StockfishScheduler {
       depth: task.depth, score: s, bestMove: mv, pv: this.lastAnnotationPv,
       mate: Math.abs(s) >= 30000 ? (s > 0 ? 30000 : -30000) : null,
     });
-    task.onScore(s);
+    task.onScore(s, this.lastAnnotationPv);
   }
 
   public startLiveEval(task: LiveTask) {
@@ -284,7 +284,7 @@ class StockfishScheduler {
     }
     if (!cached) return this.sendSearch(next.fen, next.depth);
     this.activeAnnotation = null;
-    next.onScore(cached.score ?? 0);
+    next.onScore(cached.score ?? 0, cached.pv);
     this.runNext();
   }
 

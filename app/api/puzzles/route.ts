@@ -36,6 +36,42 @@ function getSan(fen: string, uci: string): string {
   }
 }
 
+function getMaterialBalance(fen: string): number {
+  const board = fen.split(' ')[0];
+  const values: Record<string, number> = { p: -1, n: -3, b: -3, r: -5, q: -9, P: 1, N: 3, B: 3, R: 5, Q: 9 };
+  return [...board].reduce((acc, char) => acc + (values[char] || 0), 0);
+}
+
+function isSacrifice(fenBefore: string, fenAfter: string, pvAfter: string[], playerColor: 'w' | 'b'): boolean {
+  try {
+    const startBal = getMaterialBalance(fenBefore) * (playerColor === 'w' ? 1 : -1);
+    const chess = new Chess(fenAfter);
+    
+    const balAfterMove = getMaterialBalance(chess.fen()) * (playerColor === 'w' ? 1 : -1);
+    if (balAfterMove <= startBal - 2) return true; 
+
+    if (pvAfter && pvAfter.length > 0) {
+      const m0 = pvAfter[0];
+      const move0 = chess.move({ from: m0.slice(0, 2), to: m0.slice(2, 4), promotion: m0[4] });
+      if (!move0) return false;
+      const balAfterOpp = getMaterialBalance(chess.fen()) * (playerColor === 'w' ? 1 : -1);
+      
+      if (pvAfter.length > 1) {
+        const m1 = pvAfter[1];
+        const move1 = chess.move({ from: m1.slice(0, 2), to: m1.slice(2, 4), promotion: m1[4] });
+        if (!move1) return balAfterOpp <= startBal - 2;
+        const balAfterUs = getMaterialBalance(chess.fen()) * (playerColor === 'w' ? 1 : -1);
+        return balAfterOpp <= startBal - 2 && balAfterUs <= startBal - 2;
+      } else {
+        return balAfterOpp <= startBal - 2;
+      }
+    }
+    return false;
+  } catch { 
+    return false; 
+  }
+}
+
 function getDateDaysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
@@ -940,6 +976,16 @@ async function handleStd(game: any, startFen: string, bestUci: string, i: number
   return await insertPuzzle(row, puzzleType);
 }
 
+async function insertBrilliantMove(gameId: number, fenBefore: string, fenAfter: string, playedUci: string, playedSan: string, playerColor: string, gameTitle: string) {
+  const sql = `INSERT INTO brilliant_moves (game_id, fen_before, fen_after, played_uci, played_san, player_color, game_title) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  try {
+    await turso.execute({ sql, args: [gameId, fenBefore, fenAfter, playedUci, playedSan, playerColor, gameTitle] });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 async function fetchBookMovesForFens(fens: string[]): Promise<Set<string>> {
   const bookFens = fens.map(normalizeBookFen);
   const placeholders = bookFens.map(() => '?').join(',');
@@ -953,8 +999,27 @@ async function fetchBookMovesForFens(fens: string[]): Promise<Set<string>> {
 async function processMoveIndex(game: any, history: any[], fens: string[], normFens: string[], evalMap: any, i: number, uUserColor: string, bookMoves: Set<string>) {
   if (history[i].san.endsWith('#')) return false;
   const eb = evalMap[normFens[i]], ea = evalMap[normFens[i + 1]], isWhite = normFens[i].split(' ')[1] === 'w';
+  const playerColor = isWhite ? 'w' : 'b';
+  const isOpp = playerColor !== uUserColor;
+  
+  if (!isOpp && eb && ea && ea.pv) {
+    const cpBefore = getSideToMoveScore(eb);
+    const cpAfter = -getSideToMoveScore(ea);
+    const wpBefore = getWinProbability(cpBefore);
+    const wpAfter = getWinProbability(cpAfter);
+    const wpLoss = wpBefore - wpAfter;
+    if (wpLoss <= 0.05 && wpAfter >= 0.20) {
+      const playedUci = history[i].from + history[i].to + (history[i].promotion || '');
+      const isBookMove = bookMoves.has(`${normalizeBookFen(fens[i])}|${playedUci}`);
+      if (!isBookMove && isSacrifice(fens[i], fens[i + 1], ea.pv, playerColor)) {
+        const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
+        await insertBrilliantMove(game.id, fens[i], fens[i+1], playedUci, history[i].san, playerColor, gameTitle);
+      }
+    }
+  }
+
   if (!isBlunder(eb, ea, isWhite, i)) return false;
-  const isOpp = (isWhite ? 'w' : 'b') !== uUserColor, start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
+  const start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
   if (!bestUci || bookMoves.has(`${normalizeBookFen(fens[i])}|${history[i].from}${history[i].to}${history[i].promotion || ''}`)) return false;
   const playedUci = history[i].from + history[i].to + (history[i].promotion || '');
   if (!isOpp && bestUci === playedUci) return false;

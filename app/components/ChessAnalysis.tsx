@@ -1094,6 +1094,18 @@ export function ChessAnalysis() {
     finishPuzzleLoad(entries, sf, startFen);
   }, [analyzeGame, resetAnalysis, unloadGame, finishPuzzleLoad]);
 
+  const handleViewBrilliantMove = useCallback(async (gameId: number, fenBefore: string) => {
+    try {
+      const res = await fetch(`/api/games?id=${gameId}`);
+      const data = await res.json();
+      if (data.pgn) {
+        loadGameFromPuzzle(data.pgn, fenBefore, gameId);
+      }
+    } catch (err) {
+      console.error('Failed to load brilliant move game', err);
+    }
+  }, [loadGameFromPuzzle]);
+
   // PGN load
   const loadPgn = useCallback(() => {
     try {
@@ -1379,6 +1391,7 @@ export function ChessAnalysis() {
             loadBookLineDetail(lineId);
             setMode('book-explorer');
           }}
+          onViewBrilliantMove={handleViewBrilliantMove}
         />
       ) : (
         <div className="flex flex-1 overflow-hidden">

@@ -28,12 +28,12 @@ function useDashboardData() {
   return { data, loading };
 }
 
-export function Dashboard({ onExit, onPracticeLine }: { onExit: () => void; onPracticeLine?: (id: number) => void }) {
+export function Dashboard({ onExit, onPracticeLine, onViewBrilliantMove }: { onExit: () => void; onPracticeLine?: (id: number) => void; onViewBrilliantMove?: (gameId: number, fenBefore: string) => void }) {
   const { data, loading } = useDashboardData();
   const [speed, setSpeed] = useState<'blitz' | 'rapid'>('rapid');
   if (loading) return <DashboardLoading onExit={onExit} />;
   if (!data) return <DashboardError onExit={onExit} />;
-  return <DashboardContent data={data} speed={speed} setSpeed={setSpeed} onExit={onExit} onPracticeLine={onPracticeLine} />;
+  return <DashboardContent data={data} speed={speed} setSpeed={setSpeed} onExit={onExit} onPracticeLine={onPracticeLine} onViewBrilliantMove={onViewBrilliantMove} />;
 }
 
 
@@ -152,13 +152,47 @@ const OutcomeDistribution = ({ speed, stats }: { speed: string; stats: any }) =>
   </div>
 );
 
-const DashboardLeftPane = ({ points, period, setPeriod, speed, setSpeed, worstBookLines, onPracticeLine, suggestions }: any) => (
+const BrilliantMoveRow = ({ move, onView }: { move: any; onView?: (gameId: number, fenBefore: string) => void }) => (
+  <button 
+    onClick={() => onView?.(move.gameId, move.fenBefore)}
+    className="w-full text-left pt-3 first:pt-0 flex items-center justify-between gap-4 hover:bg-zinc-800/40 p-2 -mx-2 rounded transition-colors cursor-pointer"
+  >
+    <div className="space-y-1 min-w-0">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 bg-cyan-900/30 text-cyan-400 border border-cyan-800/50">!!</span>
+        <span className="font-semibold text-zinc-200 text-xs truncate block">{move.playedSan}</span>
+      </div>
+      <div className="text-[10px] text-zinc-500 font-mono truncate">{move.gameTitle}</div>
+    </div>
+  </button>
+);
+
+const BrilliantMovesList = ({ moves, onView }: { moves: any[]; onView?: (gameId: number, fenBefore: string) => void }) => (
+  <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-4 font-sans">
+    <div className="flex items-center justify-between">
+      <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Brilliant Moves</h2>
+      <span className="text-[10px] text-cyan-500 font-mono font-bold bg-cyan-900/20 px-2 py-0.5 rounded-full">{moves.length} found</span>
+    </div>
+    {moves.length === 0 ? (
+      <div className="text-zinc-550 text-xs italic py-6 text-center">No brilliant moves found yet. Keep playing!</div>
+    ) : (
+      <div className="space-y-1 divide-y divide-zinc-900/40">
+        {moves.map(m => <BrilliantMoveRow key={m.id} move={m} onView={onView} />)}
+      </div>
+    )}
+  </div>
+);
+
+const DashboardLeftPane = ({ points, period, setPeriod, speed, setSpeed, worstBookLines, onPracticeLine, suggestions, brilliantMoves, onViewBrilliantMove }: any) => (
   <div className="lg:col-span-2 space-y-6">
     <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-4">
       <div className="flex items-center justify-between"><h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-sans">Rating Progress</h2><div className="flex items-center gap-2"><EloPeriodToggle period={period} setPeriod={setPeriod} /><EloSpeedToggle speed={speed} setSpeed={setSpeed} /></div></div>
       <EloGraph points={points} />
     </div>
-    <BookLinesToPractice worstBookLines={worstBookLines} onPracticeLine={onPracticeLine} />
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <BookLinesToPractice worstBookLines={worstBookLines} onPracticeLine={onPracticeLine} />
+      <BrilliantMovesList moves={brilliantMoves} onView={onViewBrilliantMove} />
+    </div>
     <DashboardSuggestions suggestions={suggestions} />
   </div>
 );
@@ -173,7 +207,7 @@ const DashboardRightPane = ({ speed, speedStats, openings, winRates }: any) => (
 
 const MainDashboardBody = (props: any) => (
   <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <DashboardLeftPane points={props.points} period={props.period} setPeriod={props.setPeriod} speed={props.speed} setSpeed={props.setSpeed} worstBookLines={props.worstBookLines} onPracticeLine={props.onPracticeLine} suggestions={props.suggestions} />
+    <DashboardLeftPane points={props.points} period={props.period} setPeriod={props.setPeriod} speed={props.speed} setSpeed={props.setSpeed} worstBookLines={props.worstBookLines} onPracticeLine={props.onPracticeLine} suggestions={props.suggestions} brilliantMoves={props.brilliantMoves} onViewBrilliantMove={props.onViewBrilliantMove} />
     <DashboardRightPane speed={props.speed} speedStats={props.speedStats} openings={props.openings} winRates={props.winRates} />
   </div>
 );
@@ -185,7 +219,7 @@ const filterDataByPeriod = (items: any[], period: string) => {
   return items.filter(item => new Date(item.date.replace(/\./g, '-')) >= cutoff);
 };
 
-const DashboardContent = ({ data, speed, setSpeed, onExit, onPracticeLine }: any) => {
+export const DashboardContent = ({ data, speed, setSpeed, onExit, onPracticeLine, onViewBrilliantMove }: any) => {
   const [period, setPeriod] = useState<string>('all');
   const filteredGames = filterDataByPeriod(data.openingsStats || [], period);
   const grouped = groupGamesByOpening(filteredGames);
@@ -193,16 +227,16 @@ const DashboardContent = ({ data, speed, setSpeed, onExit, onPracticeLine }: any
   const suggestions = generateSuggestions(winRates);
   const list = (period === '7' || period === '30') ? data.eloHistory?.[speed]?.daily : data.eloHistory?.[speed]?.weekly;
   const points = filterDataByPeriod(list || [], period);
-  return <DashboardLayout data={data} speed={speed} setSpeed={setSpeed} period={period} setPeriod={setPeriod} winRates={winRates} suggestions={suggestions} points={points} onExit={onExit} onPracticeLine={onPracticeLine} />;
+  return <DashboardLayout data={data} speed={speed} setSpeed={setSpeed} period={period} setPeriod={setPeriod} winRates={winRates} suggestions={suggestions} points={points} onExit={onExit} onPracticeLine={onPracticeLine} brilliantMoves={data.brilliantMoves || []} onViewBrilliantMove={onViewBrilliantMove} />;
 };
 
-const DashboardLayout = ({ data, speed, setSpeed, period, setPeriod, winRates, suggestions, points, onExit, onPracticeLine }: any) => {
+const DashboardLayout = ({ data, speed, setSpeed, period, setPeriod, winRates, suggestions, points, onExit, onPracticeLine, brilliantMoves, onViewBrilliantMove }: any) => {
   const stats = data.stats?.[speed] || { wins: 0, draws: 0, losses: 0, white: {}, black: {} };
   return (
     <div className="flex-grow flex flex-col overflow-hidden bg-zinc-950 text-zinc-100">
       <DashboardHeader onExit={onExit} />
       <StatsDashboardGrid counts={data.counts || {}} pRate={getPuzzleSuccessRate(data.counts?.puzzleStats)} />
-      <MainDashboardBody points={points} speed={speed} setSpeed={setSpeed} period={period} setPeriod={setPeriod} speedStats={stats} openings={data.openings || []} winRates={winRates} suggestions={suggestions} worstBookLines={data.worstBookLines?.[period] || []} onPracticeLine={onPracticeLine} />
+      <MainDashboardBody points={points} speed={speed} setSpeed={setSpeed} period={period} setPeriod={setPeriod} speedStats={stats} openings={data.openings || []} winRates={winRates} suggestions={suggestions} worstBookLines={data.worstBookLines?.[period] || []} onPracticeLine={onPracticeLine} brilliantMoves={brilliantMoves} onViewBrilliantMove={onViewBrilliantMove} />
     </div>
   );
 };
