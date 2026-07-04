@@ -90,20 +90,20 @@ function isSacrifice(fenBefore: string, fenAfter: string, pvAfter: string[], pla
   }
 }
 
-function classifyMove(cpBefore: number, cpAfter: number, hasSacrifice: boolean): AnnotationType | null {
+function classifyMove(cpBefore: number, cpAfter: number, hasSacrifice: boolean, isPrevCheck: boolean): AnnotationType | null {
   const wpBefore = getWinProbability(cpBefore);
   const wpAfter = getWinProbability(cpAfter);
   const wpLoss = wpBefore - wpAfter;
   if (hasSacrifice) {
-    console.log('SACRIFICE DETECTED!', { cpBefore, cpAfter, wpLoss, wpAfter, isBrilliant: wpLoss <= 0.10 && wpAfter >= 0.20 });
+    console.log('SACRIFICE DETECTED!', { cpBefore, cpAfter, wpLoss, wpAfter, isBrilliant: wpLoss <= 0.10 && wpAfter >= 0.20 && Math.abs(cpBefore) <= 800 && !isPrevCheck });
   }
-  if (hasSacrifice && wpLoss <= 0.10 && wpAfter >= 0.20 && Math.abs(cpBefore) <= 800) return 'brilliant';
+  if (hasSacrifice && wpLoss <= 0.10 && wpAfter >= 0.20 && Math.abs(cpBefore) <= 800 && !isPrevCheck) return 'brilliant';
   if (wpLoss >= 0.20) return 'blunder';
   if (wpLoss >= 0.10) return 'mistake';
   return null;
 }
 
-const getUpdatedAnnotation = (existing: MoveAnnotation, cpBefore: number, cpAfter: number, afterScore: number, hasSac: boolean) => {
+const getUpdatedAnnotation = (existing: MoveAnnotation, cpBefore: number, cpAfter: number, afterScore: number, hasSac: boolean, isPrevCheck: boolean) => {
   const isBook = (existing.types ?? []).includes('book');
   const isPreBrilliant = (existing.types ?? []).includes('brilliant');
   const types: AnnotationType[] = (existing.types ?? []).filter((t) => t === 'book' || t === 'brilliant');
@@ -112,7 +112,7 @@ const getUpdatedAnnotation = (existing: MoveAnnotation, cpBefore: number, cpAfte
     return { ...existing, types, cpLoss: isBook ? 0 : cpBefore - cpAfter, score: afterScore };
   }
   
-  let engineType = classifyMove(cpBefore, cpAfter, hasSac);
+  let engineType = classifyMove(cpBefore, cpAfter, hasSac, isPrevCheck);
   if (existing.isMissedBook && !engineType) engineType = 'missed_book';
   if (engineType) types.push(engineType);
   return { ...existing, types, cpLoss: cpBefore - cpAfter, score: afterScore };
@@ -127,16 +127,18 @@ const updateMoveAnnotation = (ctx: AnalysisContext, moveIdx: number) => {
   
   const history = ctx.historyRef.current;
   let hasSac = false;
+  let isPrevCheck = false;
   if (history && history.length > moveIdx && s[moveIdx + 1].pv) {
     const fenBefore = moveIdx === 0 ? STARTING_FEN : history[moveIdx - 1].fen;
     const fenAfter = history[moveIdx].fen;
     const playerColor = moveIdx % 2 === 0 ? 'w' : 'b';
     hasSac = isSacrifice(fenBefore, fenAfter, s[moveIdx + 1].pv!, playerColor);
+    isPrevCheck = moveIdx > 0 && history[moveIdx - 1].san.includes('+');
   }
   
   ctx.setAnnotations((prev) => {
     const next = [...prev];
-    next[moveIdx] = getUpdatedAnnotation(next[moveIdx] ?? { types: [] }, scoreBefore, scoreAfter, s[moveIdx + 1].score, hasSac);
+    next[moveIdx] = getUpdatedAnnotation(next[moveIdx] ?? { types: [] }, scoreBefore, scoreAfter, s[moveIdx + 1].score, hasSac, isPrevCheck);
     return next;
   });
 };

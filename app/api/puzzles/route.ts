@@ -616,8 +616,27 @@ function mapCandidate(r: any, pm: any, ev: any, statsMap: Map<string, any>) {
 
 function buildWeaknessCandidates(analysisRows: any[], fenMap: Map<string, any>, statsMap: Map<string, any>) {
   return analysisRows.map(r => {
-    const pm = fenMap.get(String(r.fen_norm)), ev = JSON.parse(r.result_json as string);
-    return pm && ev.bestMove && ev.bestMove !== String(pm.uci) ? mapCandidate(r, pm, ev, statsMap) : null;
+    const pm = fenMap.get(String(r.fen_norm));
+    if (!pm) return null;
+    const ev = JSON.parse(r.result_json as string);
+    if (ev.bestMove && ev.bestMove !== String(pm.uci) && ev.candidates && ev.candidates.length > 0) {
+      const bestScore = getCandScore(ev.candidates[0]);
+      let playedScore: number | null = null;
+      for (const cand of ev.candidates) {
+        if (cand.bestMove === String(pm.uci)) {
+          playedScore = getCandScore(cand);
+          break;
+        }
+      }
+      if (playedScore === null) {
+        const worstCand = ev.candidates[ev.candidates.length - 1];
+        playedScore = getCandScore(worstCand) - 50;
+      }
+      if (bestScore - playedScore >= 100) {
+        return mapCandidate(r, pm, ev, statsMap);
+      }
+    }
+    return null;
   }).filter(Boolean) as any[];
 }
 
@@ -819,6 +838,7 @@ function detectBlunderDetails(evalBefore: any, evalAfter: any, isWhiteToMove: bo
   const scoreBefore = isWhiteToMove ? evalBefore.cp : -evalBefore.cp;
   const scoreAfter = isWhiteToMove ? evalAfter.cp : -evalAfter.cp;
   if (scoreBefore === undefined || scoreAfter === undefined) return null;
+  if (scoreAfter < -400) return null;
   const wpBefore = getWinProbability(scoreBefore), wpAfter = getWinProbability(-scoreAfter);
   const threshold = (ply !== undefined && ply <= 24) ? 0.10 : 0.20;
   return wpBefore - wpAfter >= threshold ? { scoreBefore, scoreAfter } : null;
@@ -987,7 +1007,7 @@ function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): strin
   const score = getSideToMoveScore(ev);
   if (score >= 200) return 'winning_position';
   if (ply <= 24 && !isOpp && score >= -150) return 'opening';
-  return score >= -350 && score <= -100 ? 'defensive' : 'tactical';
+  return score < -100 ? 'defensive' : 'tactical';
 }
 
 function getPuzzleDescription(type: string, isOpp: boolean, san: string): string {
@@ -1059,7 +1079,8 @@ async function processMoveIndex(game: any, history: any[], fens: string[], normF
     if (wpLoss <= 0.05 && wpAfter >= 0.20 && Math.abs(cpBefore) <= 800) {
       const playedUci = history[i].from + history[i].to + (history[i].promotion || '');
       const isBookMove = bookMoves.has(`${normalizeBookFen(fens[i])}|${playedUci}`);
-      if (!isBookMove && isSacrifice(fens[i], fens[i + 1], ea.pv, playerColor)) {
+      const isPrevCheck = i > 0 && history[i - 1].san.includes('+');
+      if (!isBookMove && !isPrevCheck && isSacrifice(fens[i], fens[i + 1], ea.pv, playerColor)) {
         const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
         await insertBrilliantMove(game.id, fens[i], fens[i+1], playedUci, history[i].san, playerColor, gameTitle);
       }
