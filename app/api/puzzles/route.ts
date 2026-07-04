@@ -956,8 +956,10 @@ async function processMoveIndex(game: any, history: any[], fens: string[], normF
   if (!isBlunder(eb, ea, isWhite, i)) return false;
   const isOpp = (isWhite ? 'w' : 'b') !== uUserColor, start = isOpp ? fens[i + 1] : fens[i], bestUci = isOpp ? ea.bestMove : eb.bestMove;
   if (!bestUci || bookMoves.has(`${normalizeBookFen(fens[i])}|${history[i].from}${history[i].to}${history[i].promotion || ''}`)) return false;
+  const playedUci = history[i].from + history[i].to + (history[i].promotion || '');
+  if (!isOpp && bestUci === playedUci) return false;
   const zw = await handleZw(game, start, bestUci, isOpp ? ea : eb, isOpp ? history[i] : (history[i - 1] || null), uUserColor);
-  return zw !== null ? zw : await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, history[i].from + history[i].to + (history[i].promotion || ''), history[i].san, uUserColor);
+  return zw !== null ? zw : await handleStd(game, start, bestUci, i, isOpp, isOpp ? ea : eb, playedUci, history[i].san, uUserColor);
 }
 
 async function scanGame(gameId: number) {

@@ -2474,15 +2474,38 @@ async function fetchMistakeDetail(i: number, fen: string, san: string, isMissedB
   const data = res.ok ? await res.json() : null;
   if (!data?.cached || !data.result?.bestMove) return null;
   const detail: any = { moveIndex: i, startFen: fen, playedSan: san, playedUci: getPlayedUci(fen, san), evaluation: data.result, solutionUci: data.result.bestMove, solutionSan: getSan(fen, data.result.bestMove) };
+  if (detail.solutionUci === detail.playedUci) return null;
   if (isMissedBook) await fetchBookSolutions(fen, detail);
   return detail;
+}
+
+function isCrucialMistake(a: any, idx: number): boolean {
+  if (!a) return false;
+  if (a.isMissedBook) return true;
+  if (a.cpLoss === undefined || a.score === undefined) return false;
+  
+  const getWinProbability = (cp: number) => 1 / (1 + Math.pow(10, -cp / 400));
+  
+  const isWhite = idx % 2 === 0;
+  const cpAfter = isWhite ? a.score : -a.score;
+  const cpBefore = cpAfter + a.cpLoss;
+  
+  const wpBefore = getWinProbability(cpBefore);
+  const wpAfter = getWinProbability(cpAfter);
+  const wpLoss = wpBefore - wpAfter;
+  
+  return (
+    wpLoss >= 0.20 ||
+    (cpBefore >= 150 && cpAfter < 100) ||
+    (cpBefore > -100 && cpAfter <= -150)
+  );
 }
 
 async function compileGameMistakes(h: HistoryEntry[], ann: any[], col: 'white' | 'black', sf: string) {
   const side = col === 'white' ? 0 : 1, list = [];
   for (let i = 0; i < h.length; i++) {
     const a = ann[i], before = i === 0 ? sf : h[i - 1].fen;
-    if (i % 2 !== side || !a || (!a.isMissedBook && (a.cpLoss === undefined || a.cpLoss < 50))) continue;
+    if (i % 2 !== side || !isCrucialMistake(a, i)) continue;
     const d = await fetchMistakeDetail(i, before, h[i].san, a.isMissedBook);
     if (d) list.push({ ...d, cpLoss: a.cpLoss ?? 0, isMissedBook: a.isMissedBook });
   }
@@ -2492,7 +2515,7 @@ async function compileGameMistakes(h: HistoryEntry[], ann: any[], col: 'white' |
 function getPlayerMistakeCount(annotations: any[], orientation: 'white' | 'black'): number {
   const side = orientation === 'white' ? 0 : 1;
   return annotations.filter((ann, idx) => {
-    if (idx % 2 !== side || !ann) return false;
-    return (ann.cpLoss !== undefined && ann.cpLoss >= 50) || ann.isMissedBook;
+    if (idx % 2 !== side) return false;
+    return isCrucialMistake(ann, idx);
   }).length;
 }
