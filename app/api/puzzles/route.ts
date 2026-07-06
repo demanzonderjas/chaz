@@ -1003,6 +1003,7 @@ function getSideToMoveScore(ev: any): number {
 }
 
 function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): string {
+  if (ev.mate !== undefined && ev.mate !== null && ev.mate > 0 && ev.mate <= 9) return 'checkmate';
   if (isEndgameFen(fen)) return 'endgame';
   const score = getSideToMoveScore(ev);
   if (score >= 200) return 'winning_position';
@@ -1011,6 +1012,7 @@ function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): strin
 }
 
 function getPuzzleDescription(type: string, isOpp: boolean, san: string): string {
+  if (type === 'checkmate') return isOpp ? `Opponent blundered. Find the forced mate!` : `Find the forced mate!`;
   if (type === 'endgame') return isOpp ? `Opponent blundered. Find the winning endgame technique!` : `Endgame challenge: Find the best move to convert this endgame!`;
   if (type === 'winning_position') return isOpp ? `Opponent blundered. Find the clinical winning sequence!` : `You had a winning position. Find the correct winning move!`;
   if (type === 'opening') return `Opening challenge: Find the correct move to get a playable game out of the opening!`;
@@ -1032,11 +1034,55 @@ async function handleZw(game: any, startFen: string, bestUci: string, evalAtStar
   return await insertPuzzle([game.id, startFen, bestUci, zw.solution_san, uUserColor, desc, zw.naturalUci, zw.naturalSan, gameTitle], 'zwischenzug');
 }
 
+function extractForcingSequence(startFen: string, bestUci: string, pvStrs: string[], playerColor: string): { uci: string, san: string } {
+  const chess = new Chess(startFen);
+  const uciSeq: string[] = [];
+  const sanSeq: string[] = [];
+  
+  if (!pvStrs || pvStrs.length === 0) return { uci: bestUci, san: getSan(startFen, bestUci) };
+
+  for (let i = 0; i < pvStrs.length; i++) {
+    const moveStr = pvStrs[i];
+    if (moveStr.length < 4) break;
+    const mObj = { from: moveStr.slice(0, 2), to: moveStr.slice(2, 4), promotion: moveStr[4] };
+    
+    let move;
+    try {
+      move = chess.move(mObj);
+    } catch {
+      break;
+    }
+    
+    if (!move) break;
+
+    const isUserTurn = chess.turn() !== playerColor;
+    
+    uciSeq.push(moveStr);
+    sanSeq.push(move.san);
+
+    if (isUserTurn) {
+      const isForcing = move.captured !== undefined || move.san.includes('+') || move.san.includes('#');
+      if (!isForcing) break;
+    }
+  }
+
+  if (uciSeq.length % 2 === 0) {
+    uciSeq.pop();
+    sanSeq.pop();
+  }
+
+  return uciSeq.length > 0 ? { uci: uciSeq.join(','), san: sanSeq.join(',') } : { uci: bestUci, san: getSan(startFen, bestUci) };
+}
+
 async function handleStd(game: any, startFen: string, bestUci: string, i: number, isOpponent: boolean, evalAtStart: any, blunderUci: string, blunderSan: string, uUserColor: string) {
   const gameTitle = `${game.white_name} vs ${game.black_name} (${game.played_date})`;
   const puzzleType = getPuzzleType(startFen, i, isOpponent, evalAtStart);
   const desc = getPuzzleDescription(puzzleType, isOpponent, blunderSan);
-  const row = [game.id, startFen, bestUci, getSan(startFen, bestUci), uUserColor, desc, blunderUci, blunderSan, gameTitle];
+  
+  const playerColorToMove = startFen.split(' ')[1];
+  const seq = extractForcingSequence(startFen, bestUci, evalAtStart.pv, playerColorToMove);
+  
+  const row = [game.id, startFen, seq.uci, seq.san, uUserColor, desc, blunderUci, blunderSan, gameTitle];
   return await insertPuzzle(row, puzzleType);
 }
 

@@ -443,10 +443,11 @@ const BlunderBadge = () => (
   </div>
 );
 
-type PuzzleType = 'tactical' | 'zwischenzug' | 'book' | 'weakness' | 'opening' | 'winning_position' | 'endgame' | 'defensive' | 'brilliant';
+type PuzzleType = 'tactical' | 'zwischenzug' | 'book' | 'weakness' | 'opening' | 'winning_position' | 'endgame' | 'defensive' | 'brilliant' | 'checkmate';
 
 const PUZZLE_TYPES = [
   { id: 'tactical', label: 'Tactical' },
+  { id: 'checkmate', label: 'Checkmate' },
   { id: 'zwischenzug', label: 'Zwischenzug' },
   { id: 'book', label: 'Book' },
   { id: 'weakness', label: 'Weakness' },
@@ -526,19 +527,38 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       })
       .then(data => {
         if (!active) return;
-        setPuzzle(data.puzzle);
+
+        const p = data.puzzle;
+        if (p?.type !== 'book' && p?.solution_uci?.includes(',')) {
+          p.is_sequence = true;
+          const ucis = p.solution_uci.split(',');
+          const sans = p.solution_san.split(',');
+          const chess = new Chess(p.start_fen);
+          let color = p.player_color;
+          const moves = ucis.map((uci: string, i: number) => {
+            const fen_before = chess.fen();
+            const m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+            const fen_after = chess.fen();
+            const res = { uci, san: sans[i] || m?.san || '', player_color: color, fen_after, fen_before };
+            color = color === 'w' ? 'b' : 'w';
+            return res;
+          });
+          p.book_lines = [{ name: 'Tactical Sequence', start_fen: p.start_fen, moves }];
+        }
+
+        setPuzzle(p);
         setEvaluation(data.evaluation);
         setBlunderEvaluation(data.blunderEvaluation || null);
         setBookLine(data.bookLine || null);
-        setBoardFen(data.puzzle.start_fen);
+        setBoardFen(p.start_fen);
         setStatus('playing');
         setActiveLineIdx(0);
         
         // Initialize sequenceMoveIdx for book puzzles
-        const lines = data.puzzle?.book_lines || [];
-        if (data.puzzle?.type === 'book' && lines.length > 0) {
+        const lines = p?.book_lines || [];
+        if (p?.is_sequence && lines.length > 0) {
           const startIdx = lines[0].moves.findIndex(
-            (m: any) => normalizeBookFen(m.fen_before) === normalizeBookFen(data.puzzle.start_fen)
+            (m: any) => normalizeBookFen(m.fen_before) === normalizeBookFen(p.start_fen)
           );
           setSequenceMoveIdx(startIdx !== -1 ? startIdx : 0);
         } else {
@@ -579,7 +599,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
 
   useEffect(() => {
     if (status !== 'correct' && status !== 'solved') return;
-    if (puzzleType !== 'book' || !puzzle?.book_lines || puzzle.book_lines.length === 0) return;
+    if (!puzzle?.is_sequence || !puzzle?.book_lines || puzzle.book_lines.length === 0) return;
 
     const onKey = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
@@ -640,7 +660,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
 
   // Opponent Auto-play logic (Computer moves in sequence)
   useEffect(() => {
-    if (puzzleType !== 'book' || !puzzle || !activeLine || status !== 'playing') return;
+    if (!puzzle?.is_sequence || !puzzle || !activeLine || status !== 'playing') return;
 
     if (sequenceMoveIdx >= activeLine.moves.length) {
       // Sequence completed!
@@ -728,7 +748,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     if (!isLegalMove(boardFen, sourceSquare, targetSquare, promo)) return false;
     const uci = sourceSquare + targetSquare + (promo || '');
 
-    if (puzzleType === 'book') {
+    if (puzzle.is_sequence) {
       const activeLine = puzzle.book_lines?.[activeLineIdx];
       if (!activeLine || sequenceMoveIdx === -1) return false;
       const currentCorrectMove = activeLine.moves[sequenceMoveIdx];
