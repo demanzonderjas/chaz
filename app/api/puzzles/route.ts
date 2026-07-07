@@ -1080,7 +1080,11 @@ async function handleStd(game: any, startFen: string, bestUci: string, i: number
   const desc = getPuzzleDescription(puzzleType, isOpponent, blunderSan);
   
   const playerColorToMove = startFen.split(' ')[1];
-  const seq = extractForcingSequence(startFen, bestUci, evalAtStart.pv, playerColorToMove);
+  
+  const useSequence = puzzleType === 'tactical' || puzzleType === 'checkmate';
+  const seq = useSequence 
+    ? extractForcingSequence(startFen, bestUci, evalAtStart.pv, playerColorToMove)
+    : { uci: bestUci, san: getSan(startFen, bestUci) };
   
   const row = [game.id, startFen, seq.uci, seq.san, uUserColor, desc, blunderUci, blunderSan, gameTitle];
   return await insertPuzzle(row, puzzleType);
