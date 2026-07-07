@@ -474,7 +474,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
   const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
   const [hint, setHint] = useState<string | null>(null);
-  const [hasMadeMistake, setHasMadeMistake] = useState(false);
+  const [mistakeCount, setMistakeCount] = useState(0);
   const [attemptReported, setAttemptReported] = useState(false);
   const [openings, setOpenings] = useState<{ id: number; name: string; color: string; game_count: number }[]>([]);
   const [selectedOpening, setSelectedOpening] = useState<string>('all');
@@ -515,7 +515,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     let active = true;
     setStatus('loading');
     setHint(null);
-    setHasMadeMistake(false);
+    setMistakeCount(0);
     setAttemptReported(false);
     
     let url = `/api/puzzles?type=${puzzleType}`;
@@ -573,7 +573,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         }
 
         setHint(null);
-        setHasMadeMistake(false);
+        setMistakeCount(0);
         setAttemptReported(false);
       })
       .catch(() => {
@@ -672,7 +672,9 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     if (sequenceMoveIdx >= activeLine.moves.length) {
       // Sequence completed!
       setStatus('correct');
-      reportAttempt(!hasMadeMistake);
+      // For sequence puzzles, allow 1 mistake before marking as failed.
+      const allowedMistakes = activeLine.moves.length > 1 ? 1 : 0;
+      reportAttempt(mistakeCount <= allowedMistakes);
       return;
     }
 
@@ -697,7 +699,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       }, 600);
       return () => clearTimeout(timer);
     }
-  }, [puzzleType, puzzle, activeLine, sequenceMoveIdx, status, reportAttempt, hasMadeMistake]);
+  }, [puzzleType, puzzle, activeLine, sequenceMoveIdx, status, reportAttempt, mistakeCount]);
 
   const bestLineMoves = getBestLineMoves(puzzle, evaluation);
 
@@ -705,13 +707,13 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     setPuzzleType(type);
     setPuzzle(null); setEvaluation(null); setBlunderEvaluation(null); setBookLine(null);
     setBoardFen(STARTING_FEN); setActiveLineIdx(0); setSequenceMoveIdx(-1);
-    setHint(null); setHasMadeMistake(false); setAttemptReported(false);
+    setHint(null); setMistakeCount(0); setAttemptReported(false);
   };
 
   const onReveal = useCallback(() => {
     if (!puzzle) return;
     reportAttempt(false);
-    setHasMadeMistake(true);
+    setMistakeCount(prev => prev + 2); // Ensure it counts as failed
     
     if (puzzleType === 'book') {
       const activeLine = puzzle.book_lines?.[activeLineIdx];
@@ -788,7 +790,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         return true;
       } else {
         playErrorSound();
-        setHasMadeMistake(true);
+        setMistakeCount(prev => prev + 1);
         setStatus('incorrect');
         setTimeout(() => {
           setBoardFen(currentCorrectMove.fen_before);
@@ -801,7 +803,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     const ok = isAcceptableMove(uci, puzzle, evaluation);
     if (ok) {
       setHint(null);
-      reportAttempt(!hasMadeMistake);
+      reportAttempt(mistakeCount === 0);
       const chess = new Chess(boardFen);
       try {
         const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
@@ -811,7 +813,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
     } else {
       playErrorSound();
-      setHasMadeMistake(true);
+      setMistakeCount(prev => prev + 1);
       if (puzzleType === 'zwischenzug' && uci === puzzle.blunder_uci) {
         const isCap = puzzle.description?.toLowerCase().includes('captured') || puzzle.description?.toLowerCase().includes('capture');
         setHint(isCap 
@@ -826,7 +828,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       handleWrongMove(puzzle, setBoardFen, setStatus);
     }
     return ok;
-  }, [puzzle, boardFen, status, evaluation, puzzleType, hasMadeMistake, reportAttempt, activeLineIdx, sequenceMoveIdx]);
+  }, [puzzle, boardFen, status, evaluation, puzzleType, mistakeCount, reportAttempt, activeLineIdx, sequenceMoveIdx]);
 
   const squareRenderer = useCallback(
     ({ square, children }: any) => {
