@@ -1,0 +1,15 @@
+import { createClient } from '@libsql/client';
+const turso = createClient({ url: process.env.TURSO_DATABASE_URL, authToken: process.env.TURSO_AUTH_TOKEN });
+async function run() {
+  const rs = await turso.execute("SELECT result_json FROM analysis WHERE result_json LIKE '%\"mate\":%'");
+  let c = 0;
+  for (const row of rs.rows) {
+    const ev = JSON.parse(row.result_json);
+    if (ev.mate !== undefined) {
+      console.log(ev.mate);
+      c++;
+    }
+  }
+  console.log("Total top level mates:", c);
+}
+run();

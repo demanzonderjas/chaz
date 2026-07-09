@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard, ChessboardProvider } from 'react-chessboard';
 import { playMoveSound, playErrorSound } from '../services/sound';
+import stockfishScheduler from '../services/stockfishScheduler';
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -113,8 +114,8 @@ const CandidateItem = ({ line, startFen, idx }: any) => {
 };
 
 const CandidateMovesList = ({ evaluation, startFen }: { evaluation: any; startFen: string }) => {
-  const lines = evaluation?.candidates || evaluation?.lines;
-  if (!lines) return null;
+  const lines = evaluation?.candidates || evaluation?.lines || (evaluation?.pv ? [evaluation] : null);
+  if (!lines || lines.length === 0) return null;
   return (
     <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg">
       <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Candidate Moves</div>
@@ -284,6 +285,12 @@ const StatusCard = ({
     );
   }
   if (status === 'solved') return <div className="p-3 bg-blue-950/60 border border-blue-800 text-blue-400 rounded text-sm font-semibold text-center shadow-lg">💡 Solution: {solution}</div>;
+  if (status === 'checking_live') return (
+    <div className="p-3 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded text-sm font-semibold text-center shadow-lg flex items-center justify-center gap-2">
+      <div className="w-4 h-4 rounded-full border-2 border-zinc-400 border-t-zinc-200 animate-spin" />
+      Evaluating alternative move...
+    </div>
+  );
   return <div className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded text-sm text-center">Make your move on the board...</div>;
 };
 
@@ -472,7 +479,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [blunderEvaluation, setBlunderEvaluation] = useState<any>(null);
   const [bookLine, setBookLine] = useState<string | null>(null);
   const [boardFen, setBoardFen] = useState(STARTING_FEN);
-  const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error'>('loading');
+  const [status, setStatus] = useState<'playing' | 'correct' | 'incorrect' | 'loading' | 'solved' | 'error' | 'checking_live'>('loading');
   const [hint, setHint] = useState<string | null>(null);
   const [mistakeCount, setMistakeCount] = useState(0);
   const [attemptReported, setAttemptReported] = useState(false);
@@ -710,6 +717,12 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     setHint(null); setMistakeCount(0); setAttemptReported(false);
   };
 
+  useEffect(() => {
+    return () => {
+      stockfishScheduler.stopLiveEval();
+    };
+  }, [puzzle]);
+
   const onReveal = useCallback(() => {
     if (!puzzle) return;
     reportAttempt(false);
@@ -810,24 +823,85 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         const isCapture = m ? m.san.includes('x') : false;
         playMoveSound(isCapture);
       } catch {}
-      applyCorrectMove(sourceSquare, targetSquare, promo, boardFen, setBoardFen, setStatus);
-    } else {
+      setBoardFen(chess.fen());
+      setStatus('correct');
+      return true;
+    }
+
+    const isBlunder = uci === puzzle.blunder_uci;
+    const isBook = puzzleType === 'book';
+    
+    if (isBlunder || isBook) {
       playErrorSound();
       setMistakeCount(prev => prev + 1);
-      if (puzzleType === 'zwischenzug' && uci === puzzle.blunder_uci) {
+      if (puzzleType === 'zwischenzug' && isBlunder) {
         const isCap = puzzle.description?.toLowerCase().includes('captured') || puzzle.description?.toLowerCase().includes('capture');
         setHint(isCap 
           ? "Recapturing immediately is too slow. Look for a more dangerous intermediate threat!" 
           : "Defending directly is too passive. Look for a forcing intermediate counter-threat!"
         );
-      } else if (puzzleType === 'weakness' && uci === puzzle.blunder_uci) {
+      } else if (puzzleType === 'weakness' && isBlunder) {
         setHint(`That is the move you played in the game (${puzzle.blunder_san}) which led to a loss. Find the engine's best move instead!`);
       } else {
         setHint(null);
       }
       handleWrongMove(puzzle, setBoardFen, setStatus);
+      return false;
     }
-    return ok;
+
+    // Live Check!
+    const chess = new Chess(boardFen);
+    let isCapture = false;
+    try {
+      const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
+      isCapture = m ? m.san.includes('x') : false;
+    } catch { return false; }
+    
+    const fenAfterUserMove = chess.fen();
+    setBoardFen(fenAfterUserMove);
+    setStatus('checking_live');
+    setHint(null);
+
+    const bestCand = evaluation?.candidates?.[0] || evaluation?.lines?.[0] || (evaluation?.pv ? evaluation : null);
+    const bestCp = bestCand ? (bestCand.score ?? bestCand.cp ?? 0) : 0;
+
+    stockfishScheduler.startLiveEval({
+      fen: fenAfterUserMove,
+      color: chess.turn(),
+      depth: 16,
+      onInfo: (evalResult) => {
+        if (evalResult.depth >= 16 || evalResult.mate !== null) {
+          stockfishScheduler.stopLiveEval();
+          
+          const ourCp = evalResult.score !== null ? -evalResult.score : 0;
+          const bestIsMate = bestCand?.mate !== null && bestCand?.mate !== undefined;
+          
+          let accepted = false;
+          if (bestIsMate) {
+            if (evalResult.mate !== null && evalResult.mate < 0) accepted = true;
+          } else {
+            if (evalResult.mate !== null && evalResult.mate < 0) {
+              accepted = true;
+            } else if (evalResult.mate === null && bestCp - ourCp <= 70) {
+              accepted = true;
+            }
+          }
+
+          if (accepted) {
+            reportAttempt(mistakeCount === 0);
+            playMoveSound(isCapture);
+            setStatus('correct');
+          } else {
+            playErrorSound();
+            setMistakeCount(prev => prev + 1);
+            setBoardFen(puzzle.start_fen);
+            setStatus('playing');
+          }
+        }
+      }
+    });
+    
+    return true;
   }, [puzzle, boardFen, status, evaluation, puzzleType, mistakeCount, reportAttempt, activeLineIdx, sequenceMoveIdx]);
 
   const squareRenderer = useCallback(

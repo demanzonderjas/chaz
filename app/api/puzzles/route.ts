@@ -769,7 +769,19 @@ export async function GET(req: NextRequest) {
     const details = await loadPuzzleDetails(puzzle);
     const gameResult = await fetchGameForScan(Number(puzzle.game_id));
     const game_pgn = gameResult ? String(gameResult.pgn) : null;
-    return NextResponse.json({ puzzle: { ...puzzle, game_pgn }, ...details });
+    const puzzleData = { ...puzzle, game_pgn };
+    const isSeq = String(puzzleData.solution_uci || '').includes(',');
+    if (!isSeq && type !== 'book') {
+      const pv = details.evaluation?.pv || details.evaluation?.candidates?.[0]?.pv || details.evaluation?.lines?.[0]?.pv;
+      if (pv && pv.length > 0) {
+        const deepestBestUci = pv[0];
+        if (deepestBestUci !== puzzleData.solution_uci) {
+          puzzleData.solution_uci = deepestBestUci;
+          puzzleData.solution_san = getSan(puzzleData.start_fen, deepestBestUci);
+        }
+      }
+    }
+    return NextResponse.json({ puzzle: puzzleData, ...details });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
@@ -1003,7 +1015,7 @@ function getSideToMoveScore(ev: any): number {
 }
 
 function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): string {
-  if (ev.mate !== undefined && ev.mate !== null && ev.mate > 0 && ev.mate <= 9) return 'checkmate';
+  if (ev.mate !== undefined && ev.mate !== null && ((ev.mate > 0 && ev.mate <= 9) || ev.mate === 30000)) return 'checkmate';
   if (isEndgameFen(fen)) return 'endgame';
   const score = getSideToMoveScore(ev);
   if (score >= 200) return 'winning_position';
