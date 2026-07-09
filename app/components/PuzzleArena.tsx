@@ -623,7 +623,10 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
 
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        if (activeMoveIdx > -1) {
+        if (activeMoveIdx === -2) {
+          playMoveSound(false);
+          setBoardFen(activeLine.start_fen || STARTING_FEN);
+        } else if (activeMoveIdx > -1) {
           const nextIdx = activeMoveIdx - 1;
           const nextFen = nextIdx === -1 ? (activeLine.start_fen || STARTING_FEN) : activeLine.moves[nextIdx].fen_after;
           playMoveSound(false);
@@ -631,8 +634,8 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         }
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        if (activeMoveIdx < activeLine.moves.length - 1) {
-          const nextIdx = activeMoveIdx + 1;
+        const nextIdx = activeMoveIdx === -2 ? 0 : activeMoveIdx + 1;
+        if (nextIdx < activeLine.moves.length) {
           const nextMove = activeLine.moves[nextIdx];
           playMoveSound(nextMove.san.includes('x'));
           setBoardFen(nextMove.fen_after);

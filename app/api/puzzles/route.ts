@@ -846,14 +846,33 @@ function getGameFensAndHistory(pgn: string) {
   return { history, fens };
 }
 
+function getSideToMoveScore(ev: any): number {
+  if (ev.mate !== undefined && ev.mate !== null) {
+    return ev.mate > 0 ? 10000 : -10000;
+  }
+  return ev.cp ?? ev.score ?? 0;
+}
+
+
+
 function detectBlunderDetails(evalBefore: any, evalAfter: any, isWhiteToMove: boolean, ply?: number) {
-  const scoreBefore = isWhiteToMove ? evalBefore.cp : -evalBefore.cp;
-  const scoreAfter = isWhiteToMove ? evalAfter.cp : -evalAfter.cp;
-  if (scoreBefore === undefined || scoreAfter === undefined) return null;
-  if (scoreAfter < -400) return null;
-  const wpBefore = getWinProbability(scoreBefore), wpAfter = getWinProbability(-scoreAfter);
+  const cpBefore = getSideToMoveScore(evalBefore);
+  const cpAfter = -getSideToMoveScore(evalAfter);
+  
+  const wpBefore = getWinProbability(cpBefore);
+  const wpAfter = getWinProbability(cpAfter);
+  const wpLoss = wpBefore - wpAfter;
+
+  const isNewForcedMate = evalAfter.mate !== undefined && evalAfter.mate !== null && 
+                          (evalAfter.mate > 0 || evalAfter.mate === 30000) && 
+                          !(evalBefore.mate !== undefined && evalBefore.mate !== null && (evalBefore.mate > 0 || evalBefore.mate === 30000));
+                          
+  if (isNewForcedMate) {
+    return { scoreBefore: cpBefore, scoreAfter: cpAfter };
+  }
+
   const threshold = (ply !== undefined && ply <= 24) ? 0.10 : 0.20;
-  return wpBefore - wpAfter >= threshold ? { scoreBefore, scoreAfter } : null;
+  return wpLoss >= threshold ? { scoreBefore: cpBefore, scoreAfter: cpAfter } : null;
 }
 
 function buildPuzzleRow(game: any, p: any, history: any[], fens: string[], i: number, uUserColor: string, isWhite: boolean) {
@@ -1005,13 +1024,6 @@ function isEndgameFen(fen: string): boolean {
   const board = fen.split(' ')[0];
   const pieces = board.match(/[qrbnQRBN]/g);
   return !pieces || pieces.length <= 4;
-}
-
-function getSideToMoveScore(ev: any): number {
-  if (ev.mate !== undefined && ev.mate !== null) {
-    return ev.mate > 0 ? 10000 : -10000;
-  }
-  return ev.cp ?? ev.score ?? 0;
 }
 
 function getPuzzleType(fen: string, ply: number, isOpp: boolean, ev: any): string {
