@@ -106,20 +106,35 @@ const CandidateItem = ({ line, startFen, idx }: any) => {
   const cpVal = line.score ?? line.cp ?? 0;
   const score = line.mate !== null && line.mate !== undefined ? (line.mate === 0 ? '#' : `M${Math.abs(line.mate)}`) : `${(cpVal / 100).toFixed(2)}`;
   return (
-    <div className="flex justify-between text-zinc-300 font-mono text-xs">
-      <span>{idx + 1}. {getSan(startFen, line.pv[0])}</span>
+    <div className="flex items-center gap-2 text-xs font-mono">
+      <span>{idx + 1}. {getSan(startFen, line.pv[0] || line.bestMove)} {line.isLive && <span className="text-[9px] px-1 py-0.5 ml-1 rounded bg-teal-950/80 border border-teal-900 text-teal-400 font-bold uppercase tracking-wider">Live Eval</span>}</span>
       <span className="text-zinc-400">{score}</span>
     </div>
   );
 };
 
-const CandidateMovesList = ({ evaluation, startFen }: { evaluation: any; startFen: string }) => {
-  const lines = evaluation?.candidates || evaluation?.lines || (evaluation?.pv ? [evaluation] : null);
+const CandidateMovesList = ({ evaluation, startFen, liveCandidate }: { evaluation: any; startFen: string; liveCandidate?: any }) => {
+  let lines = evaluation?.candidates || evaluation?.lines || (evaluation?.pv ? [evaluation] : null);
+  lines = lines ? [...lines] : [];
+  
+  if (liveCandidate) {
+    // Check if the live candidate is already in the list
+    const exists = lines.some((l: any) => l.bestMove === liveCandidate.bestMove || l.pv?.[0] === liveCandidate.bestMove);
+    if (!exists) {
+      lines.push(liveCandidate);
+      lines.sort((a: any, b: any) => {
+        const scoreA = a.mate !== undefined && a.mate !== null ? (a.mate > 0 ? 10000 - a.mate : -10000 - a.mate) : (a.score ?? a.cp ?? 0);
+        const scoreB = b.mate !== undefined && b.mate !== null ? (b.mate > 0 ? 10000 - b.mate : -10000 - b.mate) : (b.score ?? b.cp ?? 0);
+        return scoreB - scoreA;
+      });
+    }
+  }
+  
   if (!lines || lines.length === 0) return null;
   return (
     <div className="mt-4 p-3 bg-zinc-900 border border-zinc-850 rounded-lg">
       <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-2">Candidate Moves</div>
-      <div className="space-y-1">{lines.slice(0, 4).map((l: any, i: number) => <CandidateItem key={i} line={l} startFen={startFen} idx={i} />)}</div>
+      <div className="space-y-1">{lines.slice(0, 5).map((l: any, i: number) => <CandidateItem key={i} line={l} startFen={startFen} idx={i} />)}</div>
     </div>
   );
 };
@@ -259,15 +274,25 @@ const StatusCard = ({
   solution, 
   puzzleType, 
   hint,
-  isSequence
+  isSequence,
+  playedAlternative
 }: { 
   status: string; 
   solution: string; 
   puzzleType: string; 
   hint: string | null;
   isSequence?: boolean;
+  playedAlternative?: { uci: string, san: string, diffText: string | null } | null;
 }) => {
   if (status === 'correct') {
+    if (playedAlternative) {
+      return (
+        <div className="p-3 bg-teal-950/60 border border-teal-800 text-teal-400 rounded text-sm font-semibold text-center shadow-lg flex flex-col gap-1">
+          <span>✨ CORRECT! You found a strong alternative move ({playedAlternative.san}).</span>
+          {playedAlternative.diffText && <span className="text-xs text-teal-300 font-light opacity-80">It is {playedAlternative.diffText} than the absolute best move.</span>}
+        </div>
+      );
+    }
     return (
       <div className="p-3 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded text-sm font-semibold text-center shadow-lg">
         {puzzleType === 'book' 
@@ -483,6 +508,8 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
   const [hint, setHint] = useState<string | null>(null);
   const [mistakeCount, setMistakeCount] = useState(0);
   const [attemptReported, setAttemptReported] = useState(false);
+  const [playedAlternative, setPlayedAlternative] = useState<{ uci: string, san: string, diffText: string | null } | null>(null);
+  const [liveCandidate, setLiveCandidate] = useState<any>(null);
   const [openings, setOpenings] = useState<{ id: number; name: string; color: string; game_count: number }[]>([]);
   const [selectedOpening, setSelectedOpening] = useState<string>('all');
   const [selectedRecency, setSelectedRecency] = useState<string>('7');
@@ -582,6 +609,8 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         setHint(null);
         setMistakeCount(0);
         setAttemptReported(false);
+        setPlayedAlternative(null);
+        setLiveCandidate(null);
       })
       .catch(() => {
         if (active) setStatus('error');
@@ -825,6 +854,22 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
         const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
         const isCapture = m ? m.san.includes('x') : false;
         playMoveSound(isCapture);
+        
+        if (uci !== puzzle.solution_uci) {
+          const cand = (evaluation?.candidates || []).find((c: any) => c.bestMove === uci) || 
+                       (evaluation?.lines || []).find((l: any) => l.pv?.[0] === uci);
+          const bestCand = evaluation?.candidates?.[0] || evaluation?.lines?.[0] || evaluation;
+          
+          let diffText = null;
+          if (cand && bestCand) {
+            const bestScore = getScore(bestCand);
+            const ourScore = getScore(cand);
+            if (bestScore !== null && ourScore !== null) {
+              diffText = `${((bestScore - ourScore) / 100).toFixed(2)} pawns worse`;
+            }
+          }
+          setPlayedAlternative({ uci, san: m?.san || uci, diffText });
+        }
       } catch {}
       setBoardFen(chess.fen());
       setStatus('correct');
@@ -893,6 +938,30 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
           if (accepted) {
             reportAttempt(mistakeCount === 0);
             playMoveSound(isCapture);
+            
+            const diffText = (bestCp !== null && ourCp !== null && bestCp - ourCp > 0) 
+              ? `${((bestCp - ourCp) / 100).toFixed(2)} pawns worse` 
+              : null;
+            
+            setPlayedAlternative({ 
+              uci: sourceSquare + targetSquare + (promo || ''), 
+              san: m ? m.san : (sourceSquare + targetSquare + (promo || '')), 
+              diffText 
+            });
+            
+            // Add live eval as a candidate
+            if (evalResult.pv && evalResult.pv.length > 0) {
+              const userUci = sourceSquare + targetSquare + (promo || '');
+              setLiveCandidate({
+                bestMove: userUci,
+                pv: [userUci, ...evalResult.pv],
+                score: evalResult.score,
+                mate: evalResult.mate,
+                depth: evalResult.depth,
+                isLive: true
+              });
+            }
+            
             setStatus('correct');
           } else {
             playErrorSound();
@@ -1019,7 +1088,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                 bookLine={bookLine} 
                 onLoadGame={onLoadGame && puzzle.game_pgn ? () => onLoadGame(puzzle.game_pgn, puzzle.start_fen, puzzle.game_id) : undefined}
               />
-              <StatusCard status={status} solution={puzzle.solution_san} puzzleType={puzzleType} hint={hint} isSequence={puzzle.is_sequence} />
+              <StatusCard status={status} solution={puzzle.solution_san} puzzleType={puzzleType} hint={hint} isSequence={puzzle.is_sequence} playedAlternative={playedAlternative} />
               {status === 'playing' && hint && (
                 <div className="mt-2 text-xs text-rose-300 bg-rose-950/20 border border-rose-900/40 rounded p-2.5 text-center leading-relaxed">
                   💡 Hint: {hint}
@@ -1044,7 +1113,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                 ) : (
                   <>
                     <BestLineViewer moves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={puzzle.start_fen} />
-                    <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} />
+                    <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} liveCandidate={liveCandidate} />
                   </>
                 )
               )}
