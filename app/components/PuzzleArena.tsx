@@ -72,6 +72,21 @@ function getEvalLabel(ev: any): string {
   return (val >= 0 ? '+' : '') + val.toFixed(2);
 }
 
+function isScoreDiffAcceptable(bestCp: number, ourCp: number): boolean {
+  const diff = bestCp - ourCp;
+  if (diff <= 50) return true;
+  
+  // Relative threshold for major winning positions (+3.00 or better)
+  if (bestCp >= 300) {
+    // Allow up to a 20% drop from the best evaluation
+    // E.g., if best is +5.00, we accept +4.00 (diff 100 <= 100)
+    const allowedMargin = bestCp * 0.20; 
+    if (diff <= allowedMargin) return true;
+  }
+  
+  return false;
+}
+
 function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
   if (puzzle?.type === 'weakness' && uci === puzzle.blunder_uci) {
     return false;
@@ -86,8 +101,9 @@ function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
   if (best.mate !== null && best.mate !== undefined) {
     return cand.mate !== null && cand.mate !== undefined;
   }
-  const diff = (best.score ?? best.cp ?? 0) - (cand.score ?? cand.cp ?? 0);
-  return diff <= 50;
+  const bestCp = best.score ?? best.cp ?? 0;
+  const ourCp = cand.score ?? cand.cp ?? 0;
+  return isScoreDiffAcceptable(bestCp, ourCp);
 }
 
 
@@ -900,9 +916,11 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     // Live Check!
     const chess = new Chess(boardFen);
     let isCapture = false;
+    let userSan = '';
     try {
       const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
       isCapture = m ? m.san.includes('x') : false;
+      if (m) userSan = m.san;
     } catch { return false; }
     
     const fenAfterUserMove = chess.fen();
@@ -930,7 +948,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
           } else {
             if (evalResult.mate !== null && evalResult.mate < 0) {
               accepted = true;
-            } else if (evalResult.mate === null && bestCp - ourCp <= 70) {
+            } else if (evalResult.mate === null && isScoreDiffAcceptable(bestCp, ourCp)) {
               accepted = true;
             }
           }
@@ -945,7 +963,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
             
             setPlayedAlternative({ 
               uci: sourceSquare + targetSquare + (promo || ''), 
-              san: m ? m.san : (sourceSquare + targetSquare + (promo || '')), 
+              san: userSan || (sourceSquare + targetSquare + (promo || '')), 
               diffText 
             });
             
