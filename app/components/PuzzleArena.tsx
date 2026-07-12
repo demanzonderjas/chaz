@@ -87,7 +87,7 @@ function isScoreDiffAcceptable(bestCp: number, ourCp: number): boolean {
   return false;
 }
 
-function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
+function isAcceptableMove(uci: string, puzzle: any, ev: any, userColor: 'w' | 'b'): boolean {
   if (puzzle?.type === 'weakness' && uci === puzzle.blunder_uci) {
     return false;
   }
@@ -99,10 +99,16 @@ function isAcceptableMove(uci: string, puzzle: any, ev: any): boolean {
   const best = lines?.[0], cand = lines?.find((l: any) => l.pv?.[0] === uci);
   if (!best || !cand) return false;
   if (best.mate !== null && best.mate !== undefined) {
-    return cand.mate !== null && cand.mate !== undefined;
+    const bestIsUserMating = userColor === 'w' ? best.mate > 0 : best.mate < 0;
+    if (bestIsUserMating) {
+       return cand.mate !== null && cand.mate !== undefined && (userColor === 'w' ? cand.mate > 0 : cand.mate < 0);
+    }
+    return false;
   }
-  const bestCp = best.score ?? best.cp ?? 0;
-  const ourCp = cand.score ?? cand.cp ?? 0;
+  const bestCpRaw = best.score ?? best.cp ?? 0;
+  const ourCpRaw = cand.score ?? cand.cp ?? 0;
+  const bestCp = userColor === 'w' ? bestCpRaw : -bestCpRaw;
+  const ourCp = userColor === 'w' ? ourCpRaw : -ourCpRaw;
   return isScoreDiffAcceptable(bestCp, ourCp);
 }
 
@@ -861,11 +867,12 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
       }
     }
 
-    const ok = isAcceptableMove(uci, puzzle, evaluation);
+    const chess = new Chess(boardFen);
+    const userColor = chess.turn();
+    const ok = isAcceptableMove(uci, puzzle, evaluation, userColor);
     if (ok) {
       setHint(null);
       reportAttempt(mistakeCount === 0);
-      const chess = new Chess(boardFen);
       try {
         const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
         const isCapture = m ? m.san.includes('x') : false;
@@ -878,11 +885,12 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
           
           let diffText = null;
           if (cand && bestCand) {
-            const bestScore = getScore(bestCand);
-            const ourScore = getScore(cand);
-            if (bestScore !== null && ourScore !== null) {
-              diffText = `${((bestScore - ourScore) / 100).toFixed(2)} pawns worse`;
-            }
+            const bScoreRaw = bestCand.score ?? bestCand.cp ?? 0;
+            const cScoreRaw = cand.score ?? cand.cp ?? 0;
+            const bScore = userColor === 'w' ? bScoreRaw : -bScoreRaw;
+            const cScore = userColor === 'w' ? cScoreRaw : -cScoreRaw;
+            const diff = bScore - cScore;
+            if (diff > 0) diffText = `${(diff / 100).toFixed(2)} pawns worse`;
           }
           setPlayedAlternative({ uci, san: m?.san || uci, diffText });
         }
@@ -914,39 +922,46 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
     }
 
     // Live Check!
-    const chess = new Chess(boardFen);
+    const liveChess = new Chess(boardFen);
     let isCapture = false;
     let userSan = '';
     try {
-      const m = chess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
+      const m = liveChess.move({ from: sourceSquare, to: targetSquare, promotion: promo });
       isCapture = m ? m.san.includes('x') : false;
       if (m) userSan = m.san;
     } catch { return false; }
     
-    const fenAfterUserMove = chess.fen();
+    const fenAfterUserMove = liveChess.fen();
     setBoardFen(fenAfterUserMove);
     setStatus('checking_live');
     setHint(null);
 
     const bestCand = evaluation?.candidates?.[0] || evaluation?.lines?.[0] || (evaluation?.pv ? evaluation : null);
-    const bestCp = bestCand ? (bestCand.score ?? bestCand.cp ?? 0) : 0;
 
     stockfishScheduler.startLiveEval({
       fen: fenAfterUserMove,
-      color: chess.turn(),
+      color: liveChess.turn(),
       depth: 16,
       onInfo: (evalResult) => {
         if (evalResult.depth >= 16 || evalResult.mate !== null) {
           stockfishScheduler.stopLiveEval();
           
-          const ourCp = evalResult.score !== null ? -evalResult.score : 0;
+          const bestCpRaw = bestCand ? (bestCand.score ?? bestCand.cp ?? 0) : 0;
+          const ourCpRaw = evalResult.score !== null ? evalResult.score : 0;
+          
+          const userColor = new Chess(boardFen).turn();
+          const bestCp = userColor === 'w' ? bestCpRaw : -bestCpRaw;
+          const ourCp = userColor === 'w' ? ourCpRaw : -ourCpRaw;
+          
           const bestIsMate = bestCand?.mate !== null && bestCand?.mate !== undefined;
+          const bestIsUserMating = bestIsMate && (userColor === 'w' ? bestCand.mate > 0 : bestCand.mate < 0);
+          const evalIsUserMating = evalResult.mate !== null && (userColor === 'w' ? evalResult.mate > 0 : evalResult.mate < 0);
           
           let accepted = false;
-          if (bestIsMate) {
-            if (evalResult.mate !== null && evalResult.mate < 0) accepted = true;
+          if (bestIsMate && bestIsUserMating) {
+            if (evalIsUserMating) accepted = true;
           } else {
-            if (evalResult.mate !== null && evalResult.mate < 0) {
+            if (evalIsUserMating) {
               accepted = true;
             } else if (evalResult.mate === null && isScoreDiffAcceptable(bestCp, ourCp)) {
               accepted = true;
@@ -957,7 +972,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
             reportAttempt(mistakeCount === 0);
             playMoveSound(isCapture);
             
-            const diffText = (bestCp !== null && ourCp !== null && bestCp - ourCp > 0) 
+            const diffText = (bestCp - ourCp > 0) 
               ? `${((bestCp - ourCp) / 100).toFixed(2)} pawns worse` 
               : null;
             

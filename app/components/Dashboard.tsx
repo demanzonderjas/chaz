@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { TagsAnalytics } from './TagsAnalytics';
 
 export const StatCard = ({ title, value, subtext, icon }: any) => (
   <div className="bg-zinc-900/40 border border-zinc-850 hover:border-zinc-700/50 rounded-xl p-4 transition-all hover:-translate-y-0.5 duration-300 relative overflow-hidden group">
@@ -189,6 +190,9 @@ const DashboardLeftPane = ({ points, period, setPeriod, speed, setSpeed, worstBo
       <div className="flex items-center justify-between"><h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-sans">Rating Progress</h2><div className="flex items-center gap-2"><EloPeriodToggle period={period} setPeriod={setPeriod} /><EloSpeedToggle speed={speed} setSpeed={setSpeed} /></div></div>
       <EloGraph points={points} />
     </div>
+    
+    <TagsAnalytics />
+
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <BookLinesToPractice worstBookLines={worstBookLines} onPracticeLine={onPracticeLine} />
       <BrilliantMovesList moves={brilliantMoves} onView={onViewBrilliantMove} />

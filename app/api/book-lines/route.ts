@@ -16,16 +16,17 @@ export async function GET(req: NextRequest) {
     try {
       const normFen = normalizeBookFen(positionFen);
       const pcRs = await turso.execute({
-        sql: 'SELECT comment, arrows FROM position_comments WHERE fen = ?',
+        sql: 'SELECT comment, arrows, tags FROM position_comments WHERE fen = ?',
         args: [normFen]
       });
       if (pcRs.rows.length > 0) {
         return NextResponse.json({
           comment: pcRs.rows[0].comment ? String(pcRs.rows[0].comment) : '',
-          arrows: pcRs.rows[0].arrows ? String(pcRs.rows[0].arrows) : null
+          arrows: pcRs.rows[0].arrows ? String(pcRs.rows[0].arrows) : null,
+          tags: pcRs.rows[0].tags ? JSON.parse(String(pcRs.rows[0].tags)) : []
         });
       }
-      return NextResponse.json({ comment: '', arrows: null });
+      return NextResponse.json({ comment: '', arrows: null, tags: [] });
     } catch (err) {
       return NextResponse.json({ error: String(err) }, { status: 500 });
     }
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
       }
 
       const movesRs = await turso.execute({
-        sql: 'SELECT bm.id, bm.line_id, bm.ply, bm.fen_before, bm.fen_after, bm.san, bm.uci, bm.nag, bm.is_mainline, pc.comment, pc.arrows FROM book_moves bm LEFT JOIN position_comments pc ON bm.fen_after = pc.fen WHERE bm.line_id = ? ORDER BY bm.ply ASC',
+        sql: 'SELECT bm.id, bm.line_id, bm.ply, bm.fen_before, bm.fen_after, bm.san, bm.uci, bm.nag, bm.is_mainline, pc.comment, pc.arrows, pc.tags FROM book_moves bm LEFT JOIN position_comments pc ON bm.fen_after = pc.fen WHERE bm.line_id = ? ORDER BY bm.ply ASC',
         args: [lineId]
       });
 
@@ -92,6 +93,7 @@ export async function GET(req: NextRequest) {
         uci: String(r.uci),
         comment: r.comment ? String(r.comment) : null,
         arrows: r.arrows ? String(r.arrows) : null,
+        tags: r.tags ? JSON.parse(String(r.tags)) : [],
         nag: r.nag ? String(r.nag) : null,
         is_mainline: Number(r.is_mainline)
       }));
@@ -253,18 +255,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { lineId, ply, comment, arrows, fen } = body;
+    const { lineId, ply, comment, arrows, tags, fen } = body;
 
     if (fen) {
       const normFen = normalizeBookFen(fen);
       const hasComment = comment && comment.trim() !== '';
       const hasArrows = arrows && Array.isArray(arrows) && arrows.length > 0;
+      const hasTags = tags && Array.isArray(tags) && tags.length > 0;
 
-      if (hasComment || hasArrows) {
+      if (hasComment || hasArrows || hasTags) {
         const arrowsStr = hasArrows ? JSON.stringify(arrows) : null;
+        const tagsStr = hasTags ? JSON.stringify(tags) : '[]';
         await turso.execute({
-          sql: 'INSERT INTO position_comments (fen, comment, arrows) VALUES (?, ?, ?) ON CONFLICT(fen) DO UPDATE SET comment = excluded.comment, arrows = excluded.arrows',
-          args: [normFen, hasComment ? comment : '', arrowsStr]
+          sql: 'INSERT INTO position_comments (fen, comment, arrows, tags) VALUES (?, ?, ?, ?) ON CONFLICT(fen) DO UPDATE SET comment = excluded.comment, arrows = excluded.arrows, tags = excluded.tags',
+          args: [normFen, hasComment ? comment : '', arrowsStr, tagsStr]
         });
       } else {
         await turso.execute({
@@ -289,12 +293,14 @@ export async function POST(req: NextRequest) {
       const fenAfter = String(moveRs.rows[0].fen_after);
       const hasComment = comment && comment.trim() !== '';
       const hasArrows = arrows && Array.isArray(arrows) && arrows.length > 0;
+      const hasTags = tags && Array.isArray(tags) && tags.length > 0;
 
-      if (hasComment || hasArrows) {
+      if (hasComment || hasArrows || hasTags) {
         const arrowsStr = hasArrows ? JSON.stringify(arrows) : null;
+        const tagsStr = hasTags ? JSON.stringify(tags) : '[]';
         await turso.execute({
-          sql: 'INSERT INTO position_comments (fen, comment, arrows) VALUES (?, ?, ?) ON CONFLICT(fen) DO UPDATE SET comment = excluded.comment, arrows = excluded.arrows',
-          args: [fenAfter, hasComment ? comment : '', arrowsStr]
+          sql: 'INSERT INTO position_comments (fen, comment, arrows, tags) VALUES (?, ?, ?, ?) ON CONFLICT(fen) DO UPDATE SET comment = excluded.comment, arrows = excluded.arrows, tags = excluded.tags',
+          args: [fenAfter, hasComment ? comment : '', arrowsStr, tagsStr]
         });
       } else {
         await turso.execute({

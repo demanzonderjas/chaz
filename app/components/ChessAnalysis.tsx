@@ -91,13 +91,15 @@ function parseArrows(arrowsStr: string): Arrow[] {
 
 type PositionSetters = {
   setNote: (n: string) => void;
+  setTags: (t: string[]) => void;
   setLoaded: (a: Arrow[]) => void;
   setDrawn: (a: Arrow[]) => void;
   setSuccess: (s: boolean) => void;
 };
 
-function applyPosition(comment: string, arrows: string, s: PositionSetters) {
+function applyPosition(comment: string, tags: string[], arrows: string, s: PositionSetters) {
   s.setNote(comment);
+  s.setTags(tags);
   s.setLoaded(parseArrows(arrows));
   s.setDrawn([]);
   s.setSuccess(false);
@@ -198,6 +200,7 @@ export function ChessAnalysis() {
   const [activeBookLine, setActiveBookLine] = useState<any | null>(null);
   const [activeBookMoveIdx, setActiveBookMoveIdx] = useState<number>(-1);
   const [activeBookNote, setActiveBookNote] = useState<string>('');
+  const [activeBookTags, setActiveBookTags] = useState<string[]>([]);
   const [loadedArrows, setLoadedArrows] = useState<Arrow[]>([]);
   const [drawnArrows, setDrawnArrows] = useState<Arrow[]>([]);
   const [boardKey, setBoardKey] = useState<number>(0);
@@ -402,6 +405,7 @@ export function ChessAnalysis() {
   useEffect(() => {
     const activeMove = activeBookLine && activeBookMoveIdx >= 0 ? activeBookLine.moves[activeBookMoveIdx] : null;
     setActiveBookNote(activeMove?.comment || '');
+    setActiveBookTags(activeMove?.tags || []);
     setLoadedArrows(parseArrows(activeMove?.arrows || ''));
     setDrawnArrows([]);
     setSaveNoteSuccess(false);
@@ -418,6 +422,7 @@ export function ChessAnalysis() {
         body: JSON.stringify({
           fen: boardFen,
           comment: activeBookNote,
+          tags: activeBookTags,
           arrows: combined
         })
       });
@@ -463,6 +468,7 @@ export function ChessAnalysis() {
           lineId: activeBookLine.id,
           ply: activeMove.ply,
           comment: activeBookNote,
+          tags: activeBookTags,
           arrows: combined
         })
       });
@@ -488,40 +494,42 @@ export function ChessAnalysis() {
 
   const getCombinedArrows = () => deduplicateArrows([...loadedArrows, ...drawnArrows]);
 
-  const updateLocalBookLineState = (noteVal: string, combined: any[]) => {
+  const updateLocalBookLineState = (noteVal: string, tagsVal: string[], combined: any[]) => {
     setActiveBookNote(noteVal);
+    setActiveBookTags(tagsVal);
     setLoadedArrows(combined.map((a, i) => ({ id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${i}`, startSquare: a.startSquare, endSquare: a.endSquare, color: a.color || 'rgba(168,85,247,0.85)' })));
     setDrawnArrows([]);
     setBoardKey(k => k + 1);
-    const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => idx === activeBookMoveIdx ? { ...m, comment: noteVal, arrows: combined.length > 0 ? JSON.stringify(combined) : null } : m);
+    const updatedMoves = activeBookLine.moves.map((m: any, idx: number) => idx === activeBookMoveIdx ? { ...m, comment: noteVal, tags: tagsVal, arrows: combined.length > 0 ? JSON.stringify(combined) : null } : m);
     setActiveBookLine({ ...activeBookLine, moves: updatedMoves });
   };
 
-  const saveBookNote = async (noteVal: string) => {
+  const saveBookNote = async (noteVal: string, tagsVal: string[]) => {
     if (!activeBookLine || activeBookMoveIdx < 0) return;
     const activeMove = activeBookLine.moves[activeBookMoveIdx];
     const combined = getCombinedArrows();
-    const body = JSON.stringify({ lineId: activeBookLine.id, ply: activeMove.ply, comment: noteVal, arrows: combined });
+    const body = JSON.stringify({ lineId: activeBookLine.id, ply: activeMove.ply, comment: noteVal, tags: tagsVal, arrows: combined });
     const res = await fetch('/api/book-lines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-    if (res.ok) updateLocalBookLineState(noteVal, combined);
+    if (res.ok) updateLocalBookLineState(noteVal, tagsVal, combined);
   };
 
-  const updateLocalPositionState = (noteVal: string, combined: any[]) => {
+  const updateLocalPositionState = (noteVal: string, tagsVal: string[], combined: any[]) => {
     setActiveBookNote(noteVal);
+    setActiveBookTags(tagsVal);
     setLoadedArrows(combined.map((a, i) => ({ id: a.id || `loaded-${a.startSquare}-${a.endSquare}-${i}`, startSquare: a.startSquare, endSquare: a.endSquare, color: a.color || 'rgba(168,85,247,0.85)' })));
     setDrawnArrows([]);
     setBoardKey(k => k + 1);
     if (relevantBookLine && bookLineActiveIdx >= 0) {
-      const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => idx === bookLineActiveIdx ? { ...m, comment: noteVal, arrows: combined.length > 0 ? JSON.stringify(combined) : null } : m);
+      const updatedMoves = relevantBookLine.moves.map((m: any, idx: number) => idx === bookLineActiveIdx ? { ...m, comment: noteVal, tags: tagsVal, arrows: combined.length > 0 ? JSON.stringify(combined) : null } : m);
       setRelevantBookLine({ ...relevantBookLine, moves: updatedMoves });
     }
   };
 
-  const savePositionNote = async (noteVal: string) => {
+  const savePositionNote = async (noteVal: string, tagsVal: string[]) => {
     const combined = getCombinedArrows();
-    const body = JSON.stringify({ fen: boardFen, comment: noteVal, arrows: combined });
+    const body = JSON.stringify({ fen: boardFen, comment: noteVal, tags: tagsVal, arrows: combined });
     const res = await fetch('/api/book-lines', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-    if (res.ok) updateLocalPositionState(noteVal, combined);
+    if (res.ok) updateLocalPositionState(noteVal, tagsVal, combined);
   };
 
   const clearLocalBookArrows = () => {
@@ -795,13 +803,13 @@ export function ChessAnalysis() {
 
   useEffect(() => {
     if (mode !== 'analysis') return;
-    const setters = { setNote: setActiveBookNote, setLoaded: setLoadedArrows, setDrawn: setDrawnArrows, setSuccess: setSaveNoteSuccess };
+    const setters = { setNote: setActiveBookNote, setTags: setActiveBookTags, setLoaded: setLoadedArrows, setDrawn: setDrawnArrows, setSuccess: setSaveNoteSuccess };
     if (relevantBookLine && bookLineActiveIdx >= 0) {
       const m = relevantBookLine.moves[bookLineActiveIdx];
-      applyPosition(m.comment || '', m.arrows || '', setters);
+      applyPosition(m.comment || '', m.tags || [], m.arrows || '', setters);
       return;
     }
-    return fetchBookLine(boardFen, (d) => applyPosition(d?.comment || '', d?.arrows || '', setters));
+    return fetchBookLine(boardFen, (d) => applyPosition(d?.comment || '', d?.tags || [], d?.arrows || '', setters));
   }, [mode, boardFen, relevantBookLine, bookLineActiveIdx]);
 
 
@@ -1722,6 +1730,7 @@ export function ChessAnalysis() {
                             </div>
                             <PositionNotesInput
                               note={activeBookNote}
+                              tags={activeBookTags}
                               placeholder="Add your notes about why this move is played..."
                               onSave={saveBookNote}
                               onClearArrows={clearBookArrows}
@@ -2090,6 +2099,7 @@ export function ChessAnalysis() {
                 </div>
                 <PositionNotesInput
                   note={activeBookNote}
+                  tags={activeBookTags}
                   placeholder="Save notes for this specific board position (auto-shared across all games!)..."
                   onSave={savePositionNote}
                   onClearArrows={clearPositionArrows}
