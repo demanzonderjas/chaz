@@ -135,7 +135,7 @@ const CandidateItem = ({ line, startFen, idx }: any) => {
   );
 };
 
-const CandidateMovesList = ({ evaluation, startFen, liveCandidate }: { evaluation: any; startFen: string; liveCandidate?: any }) => {
+const CandidateMovesList = ({ evaluation, startFen, liveCandidate, puzzleColor }: { evaluation: any; startFen: string; liveCandidate?: any; puzzleColor: 'w' | 'b' }) => {
   let lines = evaluation?.candidates || evaluation?.lines || (evaluation?.pv ? [evaluation] : null);
   lines = lines ? [...lines] : [];
   
@@ -147,7 +147,7 @@ const CandidateMovesList = ({ evaluation, startFen, liveCandidate }: { evaluatio
       lines.sort((a: any, b: any) => {
         const scoreA = a.mate !== undefined && a.mate !== null ? (a.mate > 0 ? 10000 - a.mate : -10000 - a.mate) : (a.score ?? a.cp ?? 0);
         const scoreB = b.mate !== undefined && b.mate !== null ? (b.mate > 0 ? 10000 - b.mate : -10000 - b.mate) : (b.score ?? b.cp ?? 0);
-        return scoreB - scoreA;
+        return puzzleColor === 'w' ? scoreB - scoreA : scoreA - scoreB;
       });
     }
   }
@@ -1146,7 +1146,7 @@ export function PuzzleArena({ onExit, onLoadGame }: { onExit: () => void; onLoad
                 ) : (
                   <>
                     <BestLineViewer moves={bestLineMoves} boardFen={boardFen} setBoardFen={setBoardFen} startFen={puzzle.start_fen} />
-                    <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} liveCandidate={liveCandidate} />
+                    <CandidateMovesList evaluation={evaluation} startFen={puzzle.start_fen} liveCandidate={liveCandidate} puzzleColor={new Chess(puzzle.start_fen).turn()} />
                   </>
                 )
               )}
